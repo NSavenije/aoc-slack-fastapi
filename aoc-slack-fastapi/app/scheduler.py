@@ -151,30 +151,26 @@ class Scheduler:
         self.thread.start()
 
     def run(self):
+        import pytz
+        from datetime import datetime
+        amsterdam = pytz.timezone('Europe/Amsterdam')
         while True:
-            try:
-                data = fetch_leaderboard()
-                logger.info(data)
-                logger.info(format_leaderboard(data))
-                if show_leaderboard:
-                    send_vestaboard_message(vesta_leaderboard(format_leaderboard(data)))
-                    show_leaderboard = False
-                else:
-                    send_vestaboard_message(vesta_latest_stars(get_latest_stars(data, int(time.time() - 7200)*1000))[0])
-                    show_leaderboard = True
-                # if self.last_leaderboard:
-                #     # Star updates & Vestaboard every 15 min
-                #     updates = format_star_updates(self.last_leaderboard, data)
-                #     if updates:
-                #         send_slack_message("\n".join(updates))
-                # else:
-                #     print("First run, skipping star updates.")
-                # self.last_leaderboard = data
-                # # Leaderboard to Slack daily at 6:00
-                # if time.localtime().tm_hour == 6 and time.localtime().tm_min == 0:
-                #     send_slack_message(format_leaderboard(data))
-            except Exception as e:
-                logger.error(f"Scheduler error: {e}")
+            now = datetime.now(amsterdam)
+            if 8 <= now.hour < 17:
+                try:
+                    data = fetch_leaderboard()
+                    logger.info(data)
+                    logger.info(format_leaderboard(data))
+                    if show_leaderboard:
+                        send_vestaboard_message(vesta_leaderboard(format_leaderboard(data)))
+                        show_leaderboard = False
+                    else:
+                        send_vestaboard_message(vesta_latest_stars(get_latest_stars(data, int(time.time() - 7200)*1000))[0])
+                        show_leaderboard = True
+                except Exception as e:
+                    logger.error(f"Scheduler error: {e}")
+            else:
+                logger.info("Scheduler sleeping outside 8AM-5PM Amsterdam time.")
             time.sleep(900)  # 15 minutes
 
 scheduler_instance = None
