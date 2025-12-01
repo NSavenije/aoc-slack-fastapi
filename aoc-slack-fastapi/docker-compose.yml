@@ -1,0 +1,8 @@
+version: '3.8'
+services:
+  aoc-slack-fastapi:
+    build: .
+    container_name: aoc-slack-fastapi
+    ports:
+      - "8080:8080"
+    restart: always
