@@ -7,7 +7,6 @@ from app.vestaboard_notifier import send_vestaboard_message
 
 # Dummy formatting functions
 
-show_leaderboard = True
 
 VESTABOARD_CHAR_MAP = {
     ' ': 0,
@@ -154,6 +153,7 @@ class Scheduler:
         import pytz
         from datetime import datetime
         amsterdam = pytz.timezone('Europe/Amsterdam')
+        show_leaderboard = True
         while True:
             now = datetime.now(amsterdam)
             if 8 <= now.hour < 17:
