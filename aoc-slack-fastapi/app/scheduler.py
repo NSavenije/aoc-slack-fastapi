@@ -156,7 +156,7 @@ class Scheduler:
         show_leaderboard = True
         while True:
             now = datetime.now(amsterdam)
-            if 8 <= now.hour < 17:
+            if 8 <= now.hour < 21:
                 try:
                     data = fetch_leaderboard()
                     logger.info(data)
