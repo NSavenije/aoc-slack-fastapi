@@ -1,0 +1,3 @@
+aoc-leaderboard-go
+*.test
+.env
