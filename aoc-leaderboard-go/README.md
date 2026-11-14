@@ -62,8 +62,9 @@ if you log out; symptom is `advent of code returned HTTP … (expired session co
 
 ## Deploy on STACKIT Functions
 Per the Functions docs the container must be `linux/amd64`, serve HTTP on `$PORT`, handle SIGTERM and run as a numeric
-non-root user – the Dockerfile does all four. Images tagged `latest` are rejected unless combined with a digest, so the
-pipeline tags with the commit SHA.
+non-root user – the Dockerfile does all four. The runtime only accepts a SemVer image tag (with or without `v`), or `latest` combined with a digest
+(a commit-SHA tag is rejected: `oci image reference invalid`), so the pipeline tags images `1.0.<run number>` and stores the commit
+in the `org.opencontainers.image.revision` label.
 
 ### 1. Install `sfn` (once, locally)
 - **Linux/macOS:** `curl -o install-sfn.sh https://raw.githubusercontent.com/stackitcloud/stackit-functions-cli/refs/heads/main/install-sfn.sh && bash install-sfn.sh`
@@ -135,7 +136,7 @@ The deploy job starts with a **Check configuration** step that lists every missi
 ## Workflows
 | workflow | trigger | does |
 |---|---|---|
-| `deploy-stackit` | push to `master` touching this folder, or manual | test → build amd64 image → push (tag = SHA) → `sfn function deploy` with the runtime env |
+| `deploy-stackit` | push to `master` touching this folder, or manual | test → build amd64 image → push (tag = `1.0.<run number>`) → `sfn function deploy` with the runtime env |
 | `aoc-trigger` | cron every 30 min in December, or manual | `POST /run` on the function |
 | `cleanup-stackit` | manual only | delete the function (type its name to confirm); optionally the pull secret and the registry repository |
 
@@ -172,6 +173,7 @@ belongs to a member of that board.
 | `Could not verify connection … Service not enabled` | just enabled; wait a minute or two and retry; check your role on the project |
 | deploy → 502 Bad Gateway | no registry pull secret (`sfn pull-secrets create`) or the pull robot lacks Repository → Pull |
 | `unexpected value 'false' for '--build'` | `--build`/`--push` are bare flags in `sfn`; the docs' `--build=false` example is wrong. The workflow uses `FUNC_BUILD=false` / `FUNC_PUSH=false` instead |
+| `oci image reference invalid … Invalid tag` | the tag isn't SemVer (a commit SHA fails); the pipeline uses `1.0.<run number>` |
 | deploy: `Deploy not configured` | the error lists the missing variables/secrets (Settings → Secrets and variables → Actions) |
 | `docker login` / push denied | wrong push-robot credentials, or the robot lacks Repository → Push |
 | deploy workflow never starts | it triggers on `master`; check the path filter or start it manually |

@@ -92,8 +92,12 @@ jobs:
 
       - name: Build and push image (linux/amd64)
         run: |
-          TAG="${GITHUB_SHA::12}"
-          docker build --platform linux/amd64 -t "$IMAGE:$TAG" .
+          # STACKIT Functions only accepts SemVer tags (or latest + digest), so a commit SHA won't do.
+          # The run number gives a unique, increasing version; the commit is kept as an image label.
+          TAG="1.0.${GITHUB_RUN_NUMBER}"
+          docker build --platform linux/amd64 \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            -t "$IMAGE:$TAG" .
           docker push "$IMAGE:$TAG"
           echo "IMAGE_REF=$IMAGE:$TAG" >> "$GITHUB_ENV"
 
