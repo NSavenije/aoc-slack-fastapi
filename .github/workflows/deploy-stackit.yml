@@ -54,6 +54,36 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Fail fast with ONE message listing everything that is not configured yet
+      # (names only, never values).
+      - name: Check configuration
+        env:
+          STACKIT_REGISTRY: ${{ vars.STACKIT_REGISTRY }}
+          STACKIT_IMAGE: ${{ vars.STACKIT_IMAGE }}
+          STACKIT_PROJECT_ID: ${{ vars.STACKIT_PROJECT_ID }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+          STACKIT_SERVICE_ACCOUNT_KEY: ${{ secrets.STACKIT_SERVICE_ACCOUNT_KEY }}
+          AOC_LEADERBOARD_ID: ${{ secrets.AOC_LEADERBOARD_ID }}
+          AOC_SESSION: ${{ secrets.AOC_SESSION }}
+          AOC_TRIGGER_TOKEN: ${{ secrets.AOC_TRIGGER_TOKEN }}
+        run: |
+          missing=""
+          for v in STACKIT_REGISTRY STACKIT_IMAGE STACKIT_PROJECT_ID; do
+            [ -n "${!v}" ] || missing="$missing%0A  - variable $v"
+          done
+          for v in REGISTRY_USERNAME REGISTRY_PASSWORD STACKIT_SERVICE_ACCOUNT_KEY AOC_LEADERBOARD_ID AOC_SESSION AOC_TRIGGER_TOKEN; do
+            [ -n "${!v}" ] || missing="$missing%0A  - secret $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error title=Deploy not configured::Missing repository settings (Settings > Secrets and variables > Actions):$missing"
+            exit 1
+          fi
+          case "$STACKIT_IMAGE" in
+            "$STACKIT_REGISTRY"/*) ;;
+            *) echo "::error::STACKIT_IMAGE ('$STACKIT_IMAGE') must start with STACKIT_REGISTRY ('$STACKIT_REGISTRY')/"; exit 1;;
+          esac
+
       - name: Log in to the container registry
         env:
           REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
