@@ -54,6 +54,23 @@ spec:
 ```
 The function URL is public, so **always set `TRIGGER_TOKEN`**.
 
+### CI/CD (GitHub Actions)
+`.github/workflows/deploy-stackit.yml` tests, builds the image, pushes it (tag = commit SHA) and runs
+`sfn function deploy` on every push to `main` that touches this directory (or manually via *Run workflow*).
+
+One-time setup:
+1. Locally: `sfn auth login --project-id <id>`, then in `aoc-leaderboard-go/` run
+   `sfn function create --function-name aoc-leaderboard` and **commit** the generated `.stackit-functions/` manifests
+   (they hold the function id; keep secrets out of them).
+2. Registry pull secret for the runtime: `sfn pull-secrets create --address <registry>` (use a pull-only robot
+   account). Without it deploys fail with a 502.
+3. A service account with the **Functions Admin** role, and a JSON key for it.
+4. Repository **variables**: `STACKIT_REGISTRY`, `STACKIT_IMAGE` (no tag), `STACKIT_PROJECT_ID`,
+   optional `STACKIT_FUNCTION_NAME` (default `aoc-leaderboard`).
+5. Repository **secrets**: `STACKIT_SERVICE_ACCOUNT_KEY`, `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` (push access),
+   `AOC_LEADERBOARD_ID`, `AOC_SESSION`, `SLACK_WEBHOOK_URL`, `VESTABOARD_API_KEY`, `AOC_TRIGGER_TOKEN`.
+   The runtime variables are written to a temporary `.deploy.env` and passed with `--env-file`.
+
 ### Scheduling
 STACKIT Functions currently supports only HTTP triggers and scales to zero, so it can't run a cron itself.
 `.github/workflows/aoc-trigger.yml` calls `POST /run` every 30 minutes in December. Add the repository secrets

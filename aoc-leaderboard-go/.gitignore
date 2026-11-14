@@ -1,3 +1,4 @@
 aoc-leaderboard-go
 *.test
 .env
+.deploy.env

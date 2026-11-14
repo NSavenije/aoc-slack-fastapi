@@ -1,0 +1,112 @@
+# Build the container, push it to the registry and deploy it as a new revision of
+# the STACKIT Function. See aoc-leaderboard-go/README.md ("CI/CD") for the one-time
+# setup (bootstrap manifests, pull secret, service account) and required secrets.
+name: deploy-stackit
+on:
+  push:
+    branches: [main]
+    paths: ["aoc-leaderboard-go/**", ".github/workflows/deploy-stackit.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-stackit
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  # Repository *variables* (Settings > Secrets and variables > Actions > Variables)
+  REGISTRY: ${{ vars.STACKIT_REGISTRY }}          # e.g. registry.onstackit.cloud
+  IMAGE: ${{ vars.STACKIT_IMAGE }}                # full image path without tag
+  FUNC_PROJECT_ID: ${{ vars.STACKIT_PROJECT_ID }}
+  FUNC_NAME: ${{ vars.STACKIT_FUNCTION_NAME || 'aoc-leaderboard' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: aoc-leaderboard-go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: aoc-leaderboard-go/go.mod
+      - run: go vet ./... && go test ./...
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    environment: production   # optional: add required reviewers in the repo settings
+    defaults:
+      run:
+        working-directory: aoc-leaderboard-go
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to the container registry
+        env:
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+        run: echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY" -u "$REGISTRY_USERNAME" --password-stdin
+
+      - name: Build and push image (linux/amd64)
+        run: |
+          TAG="${GITHUB_SHA::12}"
+          docker build --platform linux/amd64 -t "$IMAGE:$TAG" .
+          docker push "$IMAGE:$TAG"
+          echo "IMAGE_REF=$IMAGE:$TAG" >> "$GITHUB_ENV"
+
+      # Install script as documented at
+      # https://docs.functions.onstackit.cloud/ (Automate function deployments)
+      - name: Install the STACKIT Functions CLI
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/stackitcloud/stackit-functions-cli/refs/heads/main/install-sfn.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Log in to STACKIT Functions
+        env:
+          SERVICE_ACCOUNT_KEY: ${{ secrets.STACKIT_SERVICE_ACCOUNT_KEY }}
+        run: |
+          umask 077
+          printf '%s' "$SERVICE_ACCOUNT_KEY" > "$RUNNER_TEMP/sa-key.json"
+          sfn auth login --no-interactive --service-account-key-path "$RUNNER_TEMP/sa-key.json"
+          rm -f "$RUNNER_TEMP/sa-key.json"
+
+      - name: Write runtime environment file
+        env:
+          AOC_LEADERBOARD_ID: ${{ secrets.AOC_LEADERBOARD_ID }}
+          AOC_SESSION: ${{ secrets.AOC_SESSION }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          VESTABOARD_API_KEY: ${{ secrets.VESTABOARD_API_KEY }}
+          TRIGGER_TOKEN: ${{ secrets.AOC_TRIGGER_TOKEN }}
+        run: |
+          umask 077
+          for v in AOC_LEADERBOARD_ID AOC_SESSION TRIGGER_TOKEN; do
+            [ -n "${!v}" ] || { echo "::error::secret for $v is not set"; exit 1; }
+          done
+          {
+            echo "AOC_LEADERBOARD_ID=$AOC_LEADERBOARD_ID"
+            echo "AOC_SESSION=$AOC_SESSION"
+            echo "SLACK_WEBHOOK_URL=$SLACK_WEBHOOK_URL"
+            echo "VESTABOARD_API_KEY=$VESTABOARD_API_KEY"
+            echo "TRIGGER_TOKEN=$TRIGGER_TOKEN"
+          } > .deploy.env
+
+      - name: Deploy new revision
+        env:
+          # Registry credentials the CLI uses to resolve the pushed image.
+          FUNC_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          FUNC_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+        run: |
+          sfn function deploy \
+            --no-interactive --no-progress \
+            --function-name "$FUNC_NAME" \
+            --build=false --push=false \
+            --image "$IMAGE_REF" \
+            --env-file .deploy.env
+
+      - name: Remove env file
+        if: always()
+        run: rm -f .deploy.env
