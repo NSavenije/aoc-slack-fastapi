@@ -1,0 +1,9 @@
+apiVersion: functions.stackit.cloud/v1alpha
+kind: Function
+metadata:
+  id: 056ffee6-e044-11f1-9884-4625099c37e9
+  name: aoc-leaderboard
+  created: 2026-11-14T15:53:46.006845600Z
+  annotations:
+    cli.functions.stackit.cloud/trigger: http
+spec: {}
