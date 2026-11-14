@@ -1,0 +1,88 @@
+# Tear down everything the deploy workflow created. Manual only, and destructive:
+# you must type the function name to confirm.
+name: cleanup-stackit
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type the function name to confirm deletion (default: aoc-leaderboard)"
+        required: true
+      delete_pull_secret:
+        description: "Also delete the registry pull secret (vars.STACKIT_PULL_SECRET_NAME)"
+        type: boolean
+        default: false
+      delete_registry_repository:
+        description: "Also delete the image repository from the registry (all tags, irreversible)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-stackit   # never run alongside a deploy
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ${{ vars.STACKIT_REGISTRY }}
+  IMAGE: ${{ vars.STACKIT_IMAGE }}
+  FUNC_PROJECT_ID: ${{ vars.STACKIT_PROJECT_ID }}
+  FUNC_NAME: ${{ vars.STACKIT_FUNCTION_NAME || 'aoc-leaderboard' }}
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    environment: production   # same protection rules as deploys
+    steps:
+      - name: Check confirmation
+        env:
+          CONFIRM: ${{ github.event.inputs.confirm }}
+        run: |
+          if [ "$CONFIRM" != "$FUNC_NAME" ]; then
+            echo "::error::Confirmation '$CONFIRM' does not match function name '$FUNC_NAME'. Nothing was deleted."
+            exit 1
+          fi
+
+      - name: Install the STACKIT Functions CLI
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/stackitcloud/stackit-functions-cli/refs/heads/main/install-sfn.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Log in to STACKIT Functions
+        env:
+          SERVICE_ACCOUNT_KEY: ${{ secrets.STACKIT_SERVICE_ACCOUNT_KEY }}
+        run: |
+          umask 077
+          printf '%s' "$SERVICE_ACCOUNT_KEY" > "$RUNNER_TEMP/sa-key.json"
+          sfn auth login --no-interactive --service-account-key-path "$RUNNER_TEMP/sa-key.json"
+          rm -f "$RUNNER_TEMP/sa-key.json"
+
+      - name: Delete the function (and its revisions)
+        run: sfn functions delete --no-interactive --no-progress --function-name "$FUNC_NAME"
+
+      - name: Delete the registry pull secret
+        if: ${{ github.event.inputs.delete_pull_secret == 'true' }}
+        env:
+          PULL_SECRET_NAME: ${{ vars.STACKIT_PULL_SECRET_NAME }}
+        run: |
+          [ -n "$PULL_SECRET_NAME" ] || { echo "::error::repository variable STACKIT_PULL_SECRET_NAME is not set"; exit 1; }
+          sfn pull-secrets delete --no-interactive --no-progress --pull-secret-name "$PULL_SECRET_NAME"
+
+      # Assumes a Harbor-compatible registry API (STACKIT Container Registry is Harbor-based).
+      # The registry account needs permission to delete repositories.
+      - name: Delete the image repository from the registry
+        if: ${{ github.event.inputs.delete_registry_repository == 'true' }}
+        env:
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+        run: |
+          # IMAGE = <registry>/<project>/<repository...>
+          REST="${IMAGE#"$REGISTRY"/}"
+          PROJECT="${REST%%/*}"
+          REPO="${REST#*/}"
+          [ -n "$PROJECT" ] && [ -n "$REPO" ] && [ "$REST" != "$IMAGE" ] || { echo "::error::cannot split STACKIT_IMAGE '$IMAGE' into project/repository"; exit 1; }
+          REPO_ENC="${REPO//\//%252F}"   # Harbor wants nested repo names double-encoded
+          curl --fail-with-body --silent --show-error -X DELETE \
+            -u "$REGISTRY_USERNAME:$REGISTRY_PASSWORD" \
+            "https://$REGISTRY/api/v2.0/projects/$PROJECT/repositories/$REPO_ENC"
+          echo "Deleted $REGISTRY/$PROJECT/$REPO"

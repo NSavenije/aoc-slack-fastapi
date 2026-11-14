@@ -1,0 +1,37 @@
+# STACKIT Functions only supports HTTP triggers and scales to zero, so something
+# external must call the function every half hour. The function itself decides
+# (from the clock) whether it is a leaderboard or a latest-stars slot, and skips
+# runs outside its active window, so a late or missed tick is harmless.
+name: aoc-trigger
+on:
+  schedule:
+    # every 30 min, December only; hours are UTC (08-21 Amsterdam = 07-20 UTC in
+    # winter) with a margin. The function enforces the exact window.
+    - cron: "*/30 6-20 * 12 *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Force leaderboard or stars (empty = automatic)"
+        required: false
+        default: ""
+      lookback:
+        description: "Stars lookback, e.g. 8760h to show old stars when testing a past year"
+        required: false
+        default: ""
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call function
+        env:
+          FUNCTION_URL: ${{ secrets.AOC_FUNCTION_URL }}   # https://<id>.functions.onstackit.cloud
+          TRIGGER_TOKEN: ${{ secrets.AOC_TRIGGER_TOKEN }}
+          MODE: ${{ github.event.inputs.mode }}
+          LOOKBACK: ${{ github.event.inputs.lookback }}
+        run: |
+          curl --fail-with-body --silent --show-error \
+            --max-time 90 --retry 3 --retry-delay 15 --retry-all-errors \
+            -X POST -H "Authorization: Bearer ${TRIGGER_TOKEN}" \
+            -G "${FUNCTION_URL}/run" \
+            ${MODE:+--data-urlencode "mode=${MODE}"} \
+            ${LOOKBACK:+--data-urlencode "lookback=${LOOKBACK}"}
