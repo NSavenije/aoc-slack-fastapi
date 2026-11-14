@@ -56,12 +56,15 @@ The function URL is public, so **always set `TRIGGER_TOKEN`**.
 
 ### CI/CD (GitHub Actions)
 `.github/workflows/deploy-stackit.yml` tests, builds the image, pushes it (tag = commit SHA) and runs
-`sfn function deploy` on every push to `main` that touches this directory (or manually via *Run workflow*).
+`sfn function deploy` on every push to `master` that touches this directory (or manually via *Run workflow*).
 
 One-time setup:
-1. Locally: `sfn auth login --project-id <id>`, then in `aoc-leaderboard-go/` run
-   `sfn function create --function-name aoc-leaderboard` and **commit** the generated `.stackit-functions/` manifests
-   (they hold the function id; keep secrets out of them).
+1. Locally: install `sfn` (Windows: download the `.zip` release, the install script is Linux/macOS only) and run
+   `sfn auth login --project-id <id>`. `sfn function create` needs an existing workspace, so first generate the
+   manifests with `sfn function bootstrap` (choose Go + HTTP trigger, name `aoc-leaderboard`) in a scratch folder and copy its
+   `.stackit-functions/` folder into `aoc-leaderboard-go/`. Then, inside `aoc-leaderboard-go/`, run
+   `sfn function create --function-name aoc-leaderboard` and **commit** the `.stackit-functions/` manifests
+   (they hold the function id; keep secrets out of them). If login reports "Service not enabled", wait a minute or two and retry.
 2. Registry pull secret for the runtime: `sfn pull-secrets create --address <registry>` (use a pull-only robot
    account). Without it deploys fail with a 502.
 3. A service account with the **Functions Admin** role, and a JSON key for it.

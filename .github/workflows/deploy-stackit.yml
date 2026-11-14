@@ -4,7 +4,7 @@
 name: deploy-stackit
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths: ["aoc-leaderboard-go/**", ".github/workflows/deploy-stackit.yml"]
   workflow_dispatch:
     inputs:
