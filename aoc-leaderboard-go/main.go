@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	_ "time/tzdata" // timezone data inside minimal images
 )
@@ -109,25 +112,20 @@ func main() {
 		fmt.Fprintf(w, "posted %s\n", mode)
 	})
 
-	// Optional: for platforms without a scheduler, tick at :00 and :30 ourselves.
-	if env("INTERNAL_SCHEDULER", "") == "true" {
-		go func() {
-			for {
-				now := time.Now()
-				time.Sleep(now.Truncate(30 * time.Minute).Add(30 * time.Minute).Sub(now))
-				ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-				if _, err := job.Run(ctx, ModeAuto, false); err != nil {
-					slog.Error("scheduled run failed", "err", err)
-				}
-				cancel()
-			}
-		}()
-	}
-
 	addr := ":" + env("PORT", "8080")
 	slog.Info("listening", "addr", addr, "year", job.Cfg.Year)
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
-	if err := srv.ListenAndServe(); err != nil {
+
+	// The platform sends SIGTERM when scaling down: finish in-flight runs first.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+	}()
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		slog.Error("server stopped", "err", err)
 		os.Exit(1)
 	}

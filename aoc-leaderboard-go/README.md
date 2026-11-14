@@ -28,18 +28,38 @@ between `ACTIVE_FROM_HOUR` and `ACTIVE_TO_HOUR` (Europe/Amsterdam, 08–21 by de
 | `AOC_YEAR` | no | default: current year |
 | `TRIGGER_TOKEN` | no | protects `/run` |
 | `STARS_LOOKBACK`, `ACTIVE_FROM_HOUR`, `ACTIVE_TO_HOUR`, `TIMEZONE`, `ALWAYS_ACTIVE=true`, `AOC_USER_AGENT` | no | |
-| `INTERNAL_SCHEDULER=true` | no | tick at :00/:30 inside the process (only for always-on containers) |
 
 Store `AOC_SESSION`, `SLACK_WEBHOOK_URL`, `VESTABOARD_API_KEY` and `TRIGGER_TOKEN` as secrets, not plain env vars.
 
-## Deploy on STACKIT
+## Deploy on STACKIT Functions
+Per the [Functions docs](https://docs.functions.onstackit.cloud/basics/concepts.html) the container must be
+`linux/amd64`, serve HTTP on `$PORT`, handle SIGTERM and run as a numeric non-root user – the Dockerfile does all four.
+
 ```sh
-docker build -t <registry>/aoc-leaderboard-go:2026 .
-docker push <registry>/aoc-leaderboard-go:2026
+docker build --platform linux/amd64 -t <registry>/<repo>/aoc-leaderboard:2026 .
+sfn function deploy --build=false --push=true --image <registry>/<repo>/aoc-leaderboard:2026
 ```
-Create the function from that image, set the env vars above, and add a schedule/cron
-trigger `*/30 * * * *` that does `POST /run`. (If the platform's scheduler can't call an
-HTTP endpoint, run it as an always-on container with `INTERNAL_SCHEDULER=true`.)
+(Run `sfn function create` first to get the `.stackit-functions/` manifests; the `latest` tag is rejected unless combined with a digest, so use a real tag.)
+
+Environment variables go in `.stackit-functions/revision.yaml` under `spec.envs`. Read the secrets from your local
+shell at deploy time rather than committing them:
+```yaml
+spec:
+  envs:
+    AOC_LEADERBOARD_ID: "123456"
+    AOC_SESSION:        { env: AOC_SESSION }
+    SLACK_WEBHOOK_URL:  { env: SLACK_WEBHOOK_URL }
+    VESTABOARD_API_KEY: { env: VESTABOARD_API_KEY }
+    TRIGGER_TOKEN:      { env: TRIGGER_TOKEN }
+```
+The function URL is public, so **always set `TRIGGER_TOKEN`**.
+
+### Scheduling
+STACKIT Functions currently supports only HTTP triggers and scales to zero, so it can't run a cron itself.
+`.github/workflows/aoc-trigger.yml` calls `POST /run` every 30 minutes in December. Add the repository secrets
+`AOC_FUNCTION_URL` (e.g. `https://<id>.functions.onstackit.cloud`) and `AOC_TRIGGER_TOKEN` (same value as `TRIGGER_TOKEN`).
+Because the leaderboard/stars choice comes from the clock, a late GitHub tick is harmless. Any other HTTP cron
+caller works equally well.
 
 ## Develop
 ```sh
