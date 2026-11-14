@@ -171,6 +171,7 @@ belongs to a member of that board.
 | `Error: Required manifest missing in workspace` | run `sfn function bootstrap` first (step 2), `create` needs an existing workspace |
 | `Could not verify connection … Service not enabled` | just enabled; wait a minute or two and retry; check your role on the project |
 | deploy → 502 Bad Gateway | no registry pull secret (`sfn pull-secrets create`) or the pull robot lacks Repository → Pull |
+| `unexpected value 'false' for '--build'` | `--build`/`--push` are bare flags in `sfn`; the docs' `--build=false` example is wrong. The workflow uses `FUNC_BUILD=false` / `FUNC_PUSH=false` instead |
 | deploy: `Deploy not configured` | the error lists the missing variables/secrets (Settings → Secrets and variables → Actions) |
 | `docker login` / push denied | wrong push-robot credentials, or the robot lacks Repository → Push |
 | deploy workflow never starts | it triggers on `master`; check the path filter or start it manually |
