@@ -143,11 +143,17 @@ jobs:
           # Registry credentials the CLI uses to resolve the pushed image.
           FUNC_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
           FUNC_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+          # The image is already built and pushed by the steps above. In sfn, --build/--push
+          # are bare flags (the docs' `--build=false` is rejected: "unexpected value 'false'"),
+          # so switch them off through their documented environment variables instead.
+          FUNC_BUILD: "false"
+          FUNC_PUSH: "false"
         run: |
+          sfn --version
+          sfn function deploy --help | grep -E -- '--(build|push|image|env-file)\b' || true
           sfn function deploy \
             --no-interactive --no-progress \
             --function-name "$FUNC_NAME" \
-            --build=false --push=false \
             --image "$IMAGE_REF" \
             --env-file .deploy.env
 
