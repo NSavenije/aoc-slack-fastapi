@@ -33,7 +33,7 @@ the [Functions docs](https://docs.functions.onstackit.cloud/basics/concepts.html
 ## Configuration (env)
 | var | required | |
 |---|---|---|
-| `AOC_LEADERBOARD_ID` | yes | number at the end of the private leaderboard URL |
+| `AOC_LEADERBOARD_ID` | yes | number at the end of the private leaderboard URL; in CI it may be a repository variable or a secret |
 | `AOC_SESSION` | yes | AoC session cookie, see below |
 | `SLACK_WEBHOOK_URL` | no | Slack incoming webhook; skipped if unset |
 | `VESTABOARD_API_KEY` | no | Vestaboard Read/Write key; skipped if unset |
@@ -50,7 +50,7 @@ Application (Chrome/Edge) or Storage (Firefox) → Cookies → `https://adventof
 safest). It is a login credential: keep it only in the GitHub secret. It expires after roughly a month and stops working
 if you log out; symptom is `advent of code returned HTTP … (expired session cookie?)` – copy a new one and redeploy.
 
-**Leaderboard id (`AOC_LEADERBOARD_ID`).** `adventofcode.com/<year>/leaderboard/private/view/<ID>`. The id can differ per year.
+**Leaderboard id (`AOC_LEADERBOARD_ID`).** `adventofcode.com/<year>/leaderboard/private/view/<ID>`. It is normally the owner's AoC user id, so it stays the same across years (but the board for that year must exist). It isn't sensitive by itself, so a repository variable is fine.
 
 **Slack webhook (`SLACK_WEBHOOK_URL`).** Reuse last year's Slack app: https://api.slack.com/apps → the app →
 *Incoming Webhooks* (toggle on) → *Add New Webhook to Workspace* → pick the channel → copy the
@@ -94,7 +94,7 @@ pipeline tags with the commit SHA.
 **Variables:** `STACKIT_REGISTRY` (e.g. `registry.onstackit.cloud`), `STACKIT_IMAGE` (full image path, no tag),
 `STACKIT_PROJECT_ID`; optional `STACKIT_FUNCTION_NAME` (default `aoc-leaderboard`), `AOC_YEAR`, `STACKIT_PULL_SECRET_NAME` (cleanup only).
 
-**Secrets:** `STACKIT_SERVICE_ACCOUNT_KEY`, `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` (push access), `AOC_LEADERBOARD_ID`,
+**Secrets:** `STACKIT_SERVICE_ACCOUNT_KEY`, `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` (push access), `AOC_LEADERBOARD_ID` (if you didn't set it as a variable),
 `AOC_SESSION`, `SLACK_WEBHOOK_URL`, `VESTABOARD_API_KEY`, `AOC_TRIGGER_TOKEN` (same value deployed as `TRIGGER_TOKEN`),
 `AOC_FUNCTION_URL` (`https://<id>.functions.onstackit.cloud`, printed by the first successful deploy).
 
@@ -126,7 +126,7 @@ or per deploy via *Run workflow* → `year`. To test against last year's board o
    (otherwise "latest stars" only covers the last hour and is empty for old data).
 3. Redeploy with `year` empty (and the `AOC_YEAR` variable removed) before December 2026.
 
-`AOC_LEADERBOARD_ID` is per year – update the secret if the 2025 board has a different id, and make sure the session cookie
+`AOC_LEADERBOARD_ID` is per year – update it if the 2025 board has a different id, and make sure the session cookie
 belongs to a member of that board.
 
 ## Troubleshooting

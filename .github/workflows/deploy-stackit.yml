@@ -64,7 +64,7 @@ jobs:
           REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
           REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
           STACKIT_SERVICE_ACCOUNT_KEY: ${{ secrets.STACKIT_SERVICE_ACCOUNT_KEY }}
-          AOC_LEADERBOARD_ID: ${{ secrets.AOC_LEADERBOARD_ID }}
+          AOC_LEADERBOARD_ID: ${{ vars.AOC_LEADERBOARD_ID || secrets.AOC_LEADERBOARD_ID }}  # variable or secret
           AOC_SESSION: ${{ secrets.AOC_SESSION }}
           AOC_TRIGGER_TOKEN: ${{ secrets.AOC_TRIGGER_TOKEN }}
         run: |
@@ -115,7 +115,7 @@ jobs:
 
       - name: Write runtime environment file
         env:
-          AOC_LEADERBOARD_ID: ${{ secrets.AOC_LEADERBOARD_ID }}
+          AOC_LEADERBOARD_ID: ${{ vars.AOC_LEADERBOARD_ID || secrets.AOC_LEADERBOARD_ID }}  # variable or secret
           AOC_SESSION: ${{ secrets.AOC_SESSION }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           VESTABOARD_API_KEY: ${{ secrets.VESTABOARD_API_KEY }}
