@@ -13,7 +13,7 @@ and is safe on a scale-to-zero FaaS platform. Updates are only posted during Dec
 between `ACTIVE_FROM_HOUR` and `ACTIVE_TO_HOUR` (Europe/Amsterdam, 08–21 by default).
 
 ## HTTP contract
-- `POST /run` – do one update. Optional `?mode=leaderboard|stars` (bypasses the active-window check) and `?dry=1`.
+- `POST /run` – do one update. Optional `?mode=leaderboard|stars` (bypasses the active-window check), `?lookback=8760h` (override the stars window) and `?dry=1`.
   If `TRIGGER_TOKEN` is set, send `Authorization: Bearer <token>`.
 - `GET /healthz`
 - Listens on `$PORT` (default 8080).
@@ -25,7 +25,7 @@ between `ACTIVE_FROM_HOUR` and `ACTIVE_TO_HOUR` (Europe/Amsterdam, 08–21 by de
 | `AOC_SESSION` | yes | session cookie of a leaderboard member |
 | `SLACK_WEBHOOK_URL` | no | Slack incoming webhook; skipped if unset |
 | `VESTABOARD_API_KEY` | no | Read/Write key; skipped if unset |
-| `AOC_YEAR` | no | default: current year |
+| `AOC_YEAR` | no | event year; default: the current year |
 | `TRIGGER_TOKEN` | no | protects `/run` |
 | `STARS_LOOKBACK`, `ACTIVE_FROM_HOUR`, `ACTIVE_TO_HOUR`, `TIMEZONE`, `ALWAYS_ACTIVE=true`, `AOC_USER_AGENT` | no | |
 
@@ -66,10 +66,27 @@ One-time setup:
    account). Without it deploys fail with a 502.
 3. A service account with the **Functions Admin** role, and a JSON key for it.
 4. Repository **variables**: `STACKIT_REGISTRY`, `STACKIT_IMAGE` (no tag), `STACKIT_PROJECT_ID`,
-   optional `STACKIT_FUNCTION_NAME` (default `aoc-leaderboard`).
+   optional `STACKIT_FUNCTION_NAME` (default `aoc-leaderboard`), `AOC_YEAR`, `STACKIT_PULL_SECRET_NAME` (for cleanup).
 5. Repository **secrets**: `STACKIT_SERVICE_ACCOUNT_KEY`, `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` (push access),
    `AOC_LEADERBOARD_ID`, `AOC_SESSION`, `SLACK_WEBHOOK_URL`, `VESTABOARD_API_KEY`, `AOC_TRIGGER_TOKEN`.
    The runtime variables are written to a temporary `.deploy.env` and passed with `--env-file`.
+
+### Choosing the year / testing on 2025
+The year is the `AOC_YEAR` env var (default: current year). Set it permanently with the repository variable `AOC_YEAR`,
+or per deploy via *Run workflow* → `year`. To test against last year's board outside December:
+1. Run **deploy-stackit** manually with `year = 2025` (tick `always_active` if you also want scheduled runs to post).
+2. Run **aoc-trigger** manually with `mode = leaderboard`, or `mode = stars` and `lookback = 8760h`
+   (otherwise "latest stars" only covers the last hour and will be empty for old data).
+3. Redeploy with `year` empty (or remove the `AOC_YEAR` variable) before December 2026.
+
+Note the AoC session cookie must belong to a member of that year's private leaderboard, and `AOC_LEADERBOARD_ID`
+is per year – update the secret if the 2025 board has a different id.
+
+### Cleanup
+**cleanup-stackit** (manual) deletes the function and its revisions after you type the function name. Optional extras:
+delete the registry pull secret (`STACKIT_PULL_SECRET_NAME`) and delete the image repository from the registry (assumes the
+Harbor API of STACKIT Container Registry). It does not remove the service account, the repo secrets/variables, or the
+committed `.stackit-functions/` manifests – delete the manifests yourself, as they reference the removed function id.
 
 ### Scheduling
 STACKIT Functions currently supports only HTTP triggers and scales to zero, so it can't run a cron itself.

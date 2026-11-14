@@ -93,7 +93,7 @@ func TestRunEndToEnd(t *testing.T) {
 		Slack: &Slack{HTTP: c, WebhookURL: sink.URL + "/slack"},
 		Now:   func() time.Time { return now },
 	}
-	mode, err := j.Run(context.Background(), ModeLeaderboard, false)
+	mode, err := j.Run(context.Background(), ModeLeaderboard, false, 0)
 	if err != nil || mode != ModeLeaderboard {
 		t.Fatal(mode, err)
 	}
@@ -107,11 +107,48 @@ func TestRunEndToEnd(t *testing.T) {
 
 	// outside active hours / not December => skipped in auto mode
 	now = time.Date(2026, 12, 3, 23, 0, 0, 0, loc)
-	if m, err := j.Run(context.Background(), ModeAuto, false); m != "" || err != nil {
+	if m, err := j.Run(context.Background(), ModeAuto, false, 0); m != "" || err != nil {
 		t.Fatalf("expected skip, got %q %v", m, err)
 	}
 	now = time.Date(2026, 6, 3, 10, 0, 0, 0, loc)
-	if m, _ := j.Run(context.Background(), ModeAuto, false); m != "" {
+	if m, _ := j.Run(context.Background(), ModeAuto, false, 0); m != "" {
 		t.Fatal("should skip outside December")
+	}
+}
+
+func TestLookbackOverrideAndYear(t *testing.T) {
+	var path, slack string
+	aoc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		io.WriteString(w, fixture)
+	}))
+	defer aoc.Close()
+	sink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		slack = string(b)
+	}))
+	defer sink.Close()
+	loc, _ := time.LoadLocation("Europe/Amsterdam")
+	now := time.Unix(1764587074+30, 0) // 30 seconds after the last fixture star (Dec 2025)
+	j := &Job{
+		Cfg:   Config{Year: 2025, Loc: loc, StarsLookback: time.Minute},
+		AoC:   &AoCClient{HTTP: http.DefaultClient, BaseURL: aoc.URL, Year: 2025, BoardID: "9", SessionCookie: "s", UserAgent: "t"},
+		Slack: &Slack{HTTP: http.DefaultClient, WebhookURL: sink.URL},
+		Now:   func() time.Time { return now },
+	}
+	if _, err := j.Run(context.Background(), ModeStars, false, 0); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(path, "/2025/leaderboard/private/view/9.json") {
+		t.Fatalf("wrong year in AoC URL: %s", path)
+	}
+	if !strings.Contains(slack, "Bart van Dijk") || strings.Contains(slack, "anon") {
+		t.Fatalf("default lookback should only show the newest star: %s", slack)
+	}
+	if _, err := j.Run(context.Background(), ModeStars, false, 24*time.Hour*365); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(slack, "anon #2") {
+		t.Fatalf("lookback override ignored: %s", slack)
 	}
 }

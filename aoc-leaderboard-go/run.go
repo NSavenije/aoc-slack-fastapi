@@ -53,7 +53,8 @@ func (j *Job) Active(t time.Time) bool {
 }
 
 // Run performs one update. It returns the mode that was executed.
-func (j *Job) Run(ctx context.Context, mode Mode, dry bool) (Mode, error) {
+// lookback overrides Cfg.StarsLookback when > 0 (handy to test against an old year).
+func (j *Job) Run(ctx context.Context, mode Mode, dry bool, lookback time.Duration) (Mode, error) {
 	now := j.Now()
 	if mode == ModeAuto {
 		if !j.Active(now) {
@@ -73,7 +74,10 @@ func (j *Job) Run(ctx context.Context, mode Mode, dry bool) (Mode, error) {
 	case ModeLeaderboard:
 		board, msg = LeaderboardBoard(lb, j.Cfg.Year), SlackLeaderboard(lb, j.Cfg.Year)
 	case ModeStars:
-		ev := lb.StarsSince(now.Add(-j.Cfg.StarsLookback))
+		if lookback <= 0 {
+			lookback = j.Cfg.StarsLookback
+		}
+		ev := lb.StarsSince(now.Add(-lookback))
 		board, msg = StarsBoard(ev), SlackStars(ev, j.Cfg.Loc)
 	default:
 		return mode, fmt.Errorf("unknown mode %q", mode)

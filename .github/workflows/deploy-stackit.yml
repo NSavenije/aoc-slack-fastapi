@@ -7,6 +7,15 @@ on:
     branches: [main]
     paths: ["aoc-leaderboard-go/**", ".github/workflows/deploy-stackit.yml"]
   workflow_dispatch:
+    inputs:
+      year:
+        description: "Advent of Code year to track (empty = repo variable AOC_YEAR, else the current year)"
+        required: false
+        default: ""
+      always_active:
+        description: "Post outside December / opening hours (for testing, e.g. with year 2025)"
+        type: boolean
+        default: false
 
 concurrency:
   group: deploy-stackit
@@ -81,6 +90,8 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           VESTABOARD_API_KEY: ${{ secrets.VESTABOARD_API_KEY }}
           TRIGGER_TOKEN: ${{ secrets.AOC_TRIGGER_TOKEN }}
+          AOC_YEAR: ${{ github.event.inputs.year || vars.AOC_YEAR }}
+          ALWAYS_ACTIVE: ${{ github.event.inputs.always_active == 'true' && 'true' || vars.ALWAYS_ACTIVE }}
         run: |
           umask 077
           for v in AOC_LEADERBOARD_ID AOC_SESSION TRIGGER_TOKEN; do
@@ -92,6 +103,9 @@ jobs:
             echo "SLACK_WEBHOOK_URL=$SLACK_WEBHOOK_URL"
             echo "VESTABOARD_API_KEY=$VESTABOARD_API_KEY"
             echo "TRIGGER_TOKEN=$TRIGGER_TOKEN"
+            # optional settings: only written when set
+            [ -z "$AOC_YEAR" ] || echo "AOC_YEAR=$AOC_YEAR"
+            [ -z "$ALWAYS_ACTIVE" ] || echo "ALWAYS_ACTIVE=$ALWAYS_ACTIVE"
           } > .deploy.env
 
       - name: Deploy new revision

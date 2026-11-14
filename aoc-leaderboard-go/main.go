@@ -99,7 +99,16 @@ func main() {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 		defer cancel()
-		mode, err := job.Run(ctx, Mode(r.URL.Query().Get("mode")), r.URL.Query().Get("dry") == "1")
+		var lookback time.Duration
+		if v := r.URL.Query().Get("lookback"); v != "" {
+			d, err := time.ParseDuration(v)
+			if err != nil {
+				http.Error(w, "bad lookback: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			lookback = d
+		}
+		mode, err := job.Run(ctx, Mode(r.URL.Query().Get("mode")), r.URL.Query().Get("dry") == "1", lookback)
 		if err != nil {
 			slog.Error("run failed", "err", err)
 			http.Error(w, err.Error(), http.StatusBadGateway)
