@@ -77,26 +77,60 @@ pipeline tags with the commit SHA.
 1. `sfn auth login --project-id <id>` (opens a browser; a user account is needed at least once because it enables the
    Functions service for the project). Your account needs the owner, editor or *Functions Admin* role.
    *If it says "Service not enabled" right after enabling it, wait a minute or two and retry* (`sfn functions list` verifies).
-2. Generate the manifests. `sfn function create` only works inside an existing workspace, so first bootstrap one in a scratch
-   folder and copy its manifests over:
-   ```sh
-   cd ~ && sfn function bootstrap --project-id <id>      # Go, HTTP trigger, name: aoc-leaderboard
-   cp -r ~/aoc-leaderboard/.stackit-functions <repo>/aoc-leaderboard-go/
-   cd <repo>/aoc-leaderboard-go && sfn function create --function-name aoc-leaderboard
+2. **Container registry** (by hand in the STACKIT portal; no IaC/CLI route known). Functions needs a registry to pull from:
+   create a *Container Registry*, then a *project* inside it (its name becomes part of the image path), host is
+   `registry.onstackit.cloud`. Then create **two robot accounts** in that registry project (*Robot Accounts* tab → *New Robot Account*;
+   the password is shown only once, so copy it immediately; avoid short expiries, an expired account breaks deploys/pulls):
+
+   | robot | permissions to tick | used for |
+   |---|---|---|
+   | pull (e.g. `stackit-functions-pull`) | **Repository → Pull** only | the Functions runtime (step 4) |
+   | push (e.g. `github-actions-push`) | **Repository → Pull** and **Push** (add **Artifact → Create/Read** if a push is refused) | GitHub secrets `REGISTRY_USERNAME` / `REGISTRY_PASSWORD` |
+
+   Robot usernames look like `robot$name`; paste them exactly (including the `$`).
+3. **Manifests.** `sfn function create` only works inside an existing workspace, so generate one with `sfn function bootstrap`
+   (Go runtime, HTTP trigger, name `aoc-leaderboard`). It creates a *nested* folder `<name>/` below where you ran it. Run
+   `create` **inside that folder** (the function id is written into its `function.yaml`), then copy the manifests next to our code and delete the template:
+   ```powershell
+   sfn function bootstrap --project-id <id>
+   cd .\aoc-leaderboard
+   sfn function create --function-name aoc-leaderboard
+   sfn functions list --project-id <id>                         # should list it
+   cd .. ; Copy-Item -Recurse -Force .\aoc-leaderboard\.stackit-functions .\ ; Remove-Item -Recurse -Force .\aoc-leaderboard
    ```
-   Commit `.stackit-functions/` (it holds the function id). Ignore the template's source code; the template's `image`/`runtime`
-   fields are irrelevant because we deploy our own image.
-3. Registry pull secret for the runtime: `sfn pull-secrets create --address <registry>` (use a pull-only robot account).
-   Without it deploys fail with *502 Bad Gateway*.
-4. A service account with the **Functions Admin** role and a JSON key for it.
+   Commit `.stackit-functions/` (function id, project id, plan/concurrency – no secrets). The template's source, `image` and `runtime`
+   are irrelevant because we deploy our own image. Already done for this repo; only needed again after a cleanup.
+4. **Registry pull secret** for the runtime, with the *pull* robot: `sfn pull-secrets create --address registry.onstackit.cloud`
+   (prompts for username/password; `sfn pull-secrets list` to check). Without it deploys fail with *502 Bad Gateway*.
+   The Functions docs also mention `sfn config registry add <host>` for the same purpose; use `sfn pull-secrets --help` if one of them is not recognised.
+5. **Service account** for the pipeline: portal → create a service account (e.g. `functions-deployment-pipeline`), give it the
+   **Functions Admin** role on the project, create a key and copy the JSON.
 
 ### 3. GitHub repository settings
-**Variables:** `STACKIT_REGISTRY` (e.g. `registry.onstackit.cloud`), `STACKIT_IMAGE` (full image path, no tag),
-`STACKIT_PROJECT_ID`; optional `STACKIT_FUNCTION_NAME` (default `aoc-leaderboard`), `AOC_YEAR`, `STACKIT_PULL_SECRET_NAME` (cleanup only).
+Settings → Secrets and variables → Actions.
 
-**Secrets:** `STACKIT_SERVICE_ACCOUNT_KEY`, `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` (push access), `AOC_LEADERBOARD_ID` (if you didn't set it as a variable),
-`AOC_SESSION`, `SLACK_WEBHOOK_URL`, `VESTABOARD_API_KEY`, `AOC_TRIGGER_TOKEN` (same value deployed as `TRIGGER_TOKEN`),
-`AOC_FUNCTION_URL` (`https://<id>.functions.onstackit.cloud`, printed by the first successful deploy).
+**Variables**
+| name | value |
+|---|---|
+| `STACKIT_REGISTRY` | `registry.onstackit.cloud` (host only) |
+| `STACKIT_IMAGE` | `registry.onstackit.cloud/<registry-project>/aoc-leaderboard` (no tag; `<registry-project>` is the project *inside the registry*, not the STACKIT project id) |
+| `STACKIT_PROJECT_ID` | STACKIT project id |
+| `AOC_LEADERBOARD_ID` | may be a variable *or* a secret (not sensitive on its own) |
+| `AOC_YEAR` | optional; **remove it again after testing a past year** |
+| `STACKIT_FUNCTION_NAME` / `STACKIT_PULL_SECRET_NAME` | optional (default function name `aoc-leaderboard`; pull secret name only for cleanup) |
+
+**Secrets**
+| name | value |
+|---|---|
+| `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | push robot account |
+| `STACKIT_SERVICE_ACCOUNT_KEY` | the service account's JSON key (whole JSON) |
+| `AOC_SESSION` | AoC session cookie |
+| `AOC_TRIGGER_TOKEN` | long random string; deployed as `TRIGGER_TOKEN` *and* sent as bearer token by `aoc-trigger`. e.g. PowerShell: `-join ((48..57)+(65..90)+(97..122) \| Get-Random -Count 40 \| % {[char]$_})` |
+| `SLACK_WEBHOOK_URL` | Slack incoming webhook |
+| `VESTABOARD_API_KEY` | optional until the board is tested |
+| `AOC_FUNCTION_URL` | `https://<id>.functions.onstackit.cloud`, known only after the first successful deploy (`sfn functions list`/`describe`); needed by `aoc-trigger` |
+
+The deploy job starts with a **Check configuration** step that lists every missing variable/secret by name in one error.
 
 ## Workflows
 | workflow | trigger | does |
@@ -136,7 +170,9 @@ belongs to a member of that board.
 | `sfn` not found after adding to PATH | open a new terminal (also Git Bash / VS Code); check `where.exe sfn` |
 | `Error: Required manifest missing in workspace` | run `sfn function bootstrap` first (step 2), `create` needs an existing workspace |
 | `Could not verify connection … Service not enabled` | just enabled; wait a minute or two and retry; check your role on the project |
-| deploy → 502 Bad Gateway | no registry pull secret (`sfn pull-secrets create`) |
+| deploy → 502 Bad Gateway | no registry pull secret (`sfn pull-secrets create`) or the pull robot lacks Repository → Pull |
+| deploy: `Deploy not configured` | the error lists the missing variables/secrets (Settings → Secrets and variables → Actions) |
+| `docker login` / push denied | wrong push-robot credentials, or the robot lacks Repository → Push |
 | deploy workflow never starts | it triggers on `master`; check the path filter or start it manually |
 | `advent of code returned HTTP …` | expired/wrong `AOC_SESSION`, or wrong leaderboard id/year |
 | `/run` answers 401 | missing/incorrect `Authorization: Bearer <TRIGGER_TOKEN>` |
