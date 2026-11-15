@@ -142,10 +142,10 @@ The deploy job starts with a **Check configuration** step that lists every missi
 
 Notes:
 - The default branch is **`master`**; the deploy workflow triggers on that.
-- Runtime variables are written to a temporary, gitignored `.deploy.env` and passed with `sfn function deploy --env-file`.
-  The CLI reference only says "name of the environment variables file"; **not verified yet** how that combines with
-  `spec.envs` in `revision.yaml`. If the first deployed revision lacks the variables, put them in `revision.yaml` instead
-  (`MY_VAR: { env: LOCAL_ENV_NAME }` reads from the shell at deploy time).
+- Runtime variables are passed to `sfn function deploy` as repeated `--env KEY=VALUE` flags (empty optional ones are skipped; the
+  log lists variable *names* only). `--env-file` was tried first and did **not** work: the revision never became ready, apparently
+  because the variables didn't arrive and the app exits at startup without `AOC_LEADERBOARD_ID`/`AOC_SESSION`. The same image
+  ran fine on STACKIT Functions when started with `--env`.
 - Registry deletion in `cleanup-stackit` assumes the Harbor API of STACKIT Container Registry and a registry account that may
   delete repositories (**not verified**).
 - Cleanup does not remove the service account, repo secrets/variables, or the committed `.stackit-functions/` manifests
@@ -174,6 +174,8 @@ belongs to a member of that board.
 | deploy → 502 Bad Gateway | no registry pull secret (`sfn pull-secrets create`) or the pull robot lacks Repository → Pull |
 | `unexpected value 'false' for '--build'` | `--build`/`--push` are bare flags in `sfn`; the docs' `--build=false` example is wrong. The workflow uses `FUNC_BUILD=false` / `FUNC_PUSH=false` instead |
 | `oci image reference invalid … Invalid tag` | the tag isn't SemVer (a commit SHA fails); the pipeline uses `1.0.<run number>` |
+| revision stays `Creating` (ingress answers `404` from `istio-envoy`, no logs) | the container isn't starting; most often the required variables didn't reach it (the app exits without `AOC_LEADERBOARD_ID`/`AOC_SESSION`). Use `--env`, not `--env-file`; verify with `curl <function-url>/healthz` (should be `ok`) |
+| `denied` while `sfn` pulls `ghcr.io/stackitcloud/functions-builder` (only when building templates locally) | stale ghcr.io login in Docker: `docker logout ghcr.io` |
 | deploy: `Deploy not configured` | the error lists the missing variables/secrets (Settings → Secrets and variables → Actions) |
 | `docker login` / push denied | wrong push-robot credentials, or the robot lacks Repository → Push |
 | deploy workflow never starts | it triggers on `master`; check the path filter or start it manually |
