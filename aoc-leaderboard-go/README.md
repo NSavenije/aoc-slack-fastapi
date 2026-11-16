@@ -136,12 +136,13 @@ The deploy job starts with a **Check configuration** step that lists every missi
 ## Workflows
 | workflow | trigger | does |
 |---|---|---|
-| `deploy-stackit` | push to `master` touching this folder, or manual | test → build amd64 image → push (tag = `1.0.<run number>`) → `sfn function deploy` with the runtime env |
+| `deploy-stackit` | push to `master` that changes Go source (not `*_test.go`), `go.mod`/`go.sum` or the `Dockerfile`; or manual (*Run workflow*) | test → build amd64 image → push (tag = `1.0.<run number>`) → `sfn function deploy` with the runtime env |
 | `aoc-trigger` | cron every 30 min in December, or manual | `POST /run` on the function |
 | `cleanup-stackit` | manual only | delete the function (type its name to confirm); optionally the pull secret and the registry repository |
 
 Notes:
-- The default branch is **`master`**; the deploy workflow triggers on that.
+- The default branch is **`master`**; the deploy workflow triggers on that. Edits to the README, tests, workflows or `.stackit-functions/`
+  (e.g. plan/concurrency) do **not** redeploy automatically – start *Run workflow* manually after changing those.
 - Runtime variables are passed to `sfn function deploy` as repeated `--env KEY=VALUE` flags (empty optional ones are skipped; the
   log lists variable *names* only). `--env-file` was tried first and did **not** work: the revision never became ready, apparently
   because the variables didn't arrive and the app exits at startup without `AOC_LEADERBOARD_ID`/`AOC_SESSION`. The same image

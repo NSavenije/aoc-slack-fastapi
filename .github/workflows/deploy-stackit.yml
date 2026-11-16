@@ -5,7 +5,14 @@ name: deploy-stackit
 on:
   push:
     branches: [master]
-    paths: ["aoc-leaderboard-go/**", ".github/workflows/deploy-stackit.yml"]
+    # Only changes that alter the built container redeploy automatically. README/docs, tests,
+    # workflow and manifest edits do not; use "Run workflow" for those.
+    paths:
+      - "aoc-leaderboard-go/**/*.go"
+      - "!aoc-leaderboard-go/**/*_test.go"
+      - "aoc-leaderboard-go/go.mod"
+      - "aoc-leaderboard-go/go.sum"
+      - "aoc-leaderboard-go/Dockerfile"
   workflow_dispatch:
     inputs:
       year:
