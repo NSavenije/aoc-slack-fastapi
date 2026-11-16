@@ -177,6 +177,7 @@ func newSinks(t *testing.T, board string) *sinks {
 				t.Errorf("bad vestaboard payload: %v", err)
 			}
 			s.vesta = append(s.vesta, bd)
+			io.WriteString(w, `{"status":"ok","id":"msg-123"}`)
 		}
 	}))
 	s.aocURL = aoc.URL
@@ -264,11 +265,15 @@ func TestManualModesAndTargets(t *testing.T) {
 	j := s.job(&now, cfg)
 
 	// target=vesta only touches the Vestaboard
-	if _, err := j.Run(context.Background(), Options{Mode: ModeLeaderboard, Target: TargetVesta}); err != nil {
+	res, err := j.Run(context.Background(), Options{Mode: ModeLeaderboard, Target: TargetVesta})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if len(s.slack) != 0 || len(s.vesta) != 1 {
 		t.Fatalf("target=vesta: slack=%v vesta=%d", s.slack, len(s.vesta))
+	}
+	if res.Actions[0] != `vesta: leaderboard page 1/1 -> HTTP 200 {"status":"ok","id":"msg-123"}` {
+		t.Fatalf("the API's answer should be part of the result: %q", res.Actions)
 	}
 	if !strings.Contains(s.path, "/2025/") {
 		t.Fatalf("configured year not used: %s", s.path)
@@ -290,8 +295,20 @@ func TestManualModesAndTargets(t *testing.T) {
 
 	// dry run: fetches but posts nothing
 	s.slack, s.vesta = nil, nil
-	res, err := j.Run(context.Background(), Options{Mode: ModeLeaderboard, Dry: true})
+	res, err = j.Run(context.Background(), Options{Mode: ModeLeaderboard, Dry: true})
 	if err != nil || len(s.slack)+len(s.vesta) != 0 || len(res.Actions) != 2 {
 		t.Fatalf("dry run: %v %v %+v %v", s.slack, s.vesta, res, err)
+	}
+}
+
+func TestVestaboardErrorShowsAnswerButNotKey(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"invalid key"}`, http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+	v := &Vestaboard{HTTP: http.DefaultClient, URL: srv.URL, APIKey: "SECRET-KEY"}
+	_, err := v.Send(context.Background(), Board{})
+	if err == nil || !strings.Contains(err.Error(), "HTTP 401") || !strings.Contains(err.Error(), "invalid key") || strings.Contains(err.Error(), "SECRET-KEY") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
