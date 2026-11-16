@@ -176,6 +176,10 @@ func (v *Vestaboard) Send(ctx context.Context, b Board) (string, error) {
 	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 300))
 	answer := fmt.Sprintf("HTTP %d %s", resp.StatusCode, strings.Join(strings.Fields(string(snippet)), " "))
 	switch {
+	case resp.StatusCode == http.StatusConflict && strings.Contains(string(snippet), "FingerprintMatch"):
+		// The Cloud API refuses to resend the message it has on record as displayed. That is not
+		// a failure (e.g. a one-page leaderboard is identical every half hour) - but keep it visible.
+		return "unchanged, the Cloud API says this exact message is already displayed: " + answer, nil
 	case resp.StatusCode == http.StatusLocked:
 		return "", fmt.Errorf("vestaboard is muted / in quiet hours, answered %s (set VESTABOARD_FORCE=true to send anyway)", answer)
 	case resp.StatusCode/100 != 2:

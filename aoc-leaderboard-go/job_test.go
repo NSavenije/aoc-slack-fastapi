@@ -370,3 +370,26 @@ func TestVestaboardCloudAndLegacyRequests(t *testing.T) {
 		t.Fatalf("423 not explained: %v", err)
 	}
 }
+
+func TestVestaboardDuplicateIsNotAnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		io.WriteString(w, `{"status":"error","message":"This message is currently displayed on the Vestaboard already","type":"FingerprintMatch"}`)
+	}))
+	defer srv.Close()
+	v := &Vestaboard{HTTP: http.DefaultClient, URL: srv.URL, APIKey: "tok"}
+	got, err := v.Send(context.Background(), Board{})
+	if err != nil || !strings.Contains(got, "already displayed") || !strings.Contains(got, "FingerprintMatch") {
+		t.Fatalf("duplicate should be reported but not fail: %q %v", got, err)
+	}
+
+	// any other 409 stays an error
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"status":"error","type":"Other"}`, http.StatusConflict)
+	}))
+	defer srv2.Close()
+	v = &Vestaboard{HTTP: http.DefaultClient, URL: srv2.URL, APIKey: "tok"}
+	if _, err := v.Send(context.Background(), Board{}); err == nil {
+		t.Fatal("other 409s must still fail")
+	}
+}
