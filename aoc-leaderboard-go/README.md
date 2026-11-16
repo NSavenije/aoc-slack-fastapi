@@ -1,16 +1,20 @@
 # aoc-leaderboard-go
 
-Go container for our private Advent of Code leaderboard. Every half hour it posts to
-**Slack** and the **Vestaboard**, alternating between:
+Go container for our private Advent of Code leaderboard. It posts to **Slack** and to the **Vestaboard**.
 
-| half-hour slot | content |
-|---|---|
-| even (:00) | leaderboard (top 10 on the board, full list in Slack) |
-| odd (:30)  | latest stars (stars earned in the last `STARS_LOOKBACK`, default 60m) |
+| | when (Europe/Amsterdam) | what |
+|---|---|---|
+| **Slack** – leaderboard | every morning at 08:00 (any day of the event) | the full leaderboard |
+| **Slack** – new stars | every 15 minutes, 06:00–22:00 | one message with all stars earned in the previous 15 minutes; **no message if there are none** |
+| **Vestaboard** | every 30 minutes, **Mon–Fri 08:00–17:00** | a star earned in the previous 30 minutes is shown instead (newest 5); otherwise the next **leaderboard page** (10 people per page, pages cycle with the clock) |
 
-The choice is derived from the clock (`unix/1800 % 2`), so the service holds **no state**
-and is safe on a scale-to-zero FaaS platform. Updates are only posted during December,
-between `ACTIVE_FROM_HOUR` and `ACTIVE_TO_HOUR` (Europe/Amsterdam, 08–21 by default).
+All of it only happens on the event days, **December 1–12** (`EVENT_FIRST_DAY`/`EVENT_LAST_DAY`), and only if `AOC_YEAR`
+is the current year.
+
+Everything is derived from the clock, so the service holds **no state** and is safe on a scale-to-zero FaaS platform. The
+trade-off: "new stars" are the stars whose timestamp falls in the previous *aligned* 15/30-minute window (e.g. a call at 08:00:20
+reports 07:45:00–08:00:00). If a scheduled call is skipped entirely, the stars of that window are never reported; if two calls land in
+the same window, they are reported twice. GitHub's scheduler occasionally does either.
 
 ## How it fits together
 ```
@@ -24,9 +28,12 @@ the [Functions docs](https://docs.functions.onstackit.cloud/basics/concepts.html
 `.stackit-functions/*.yaml` manifests are the way to manage it.
 
 ## HTTP contract
-- `POST /run` – do one update. Optional `?mode=leaderboard|stars` (bypasses the active-window check),
-  `?lookback=8760h` (override the stars window) and `?dry=1` (fetch only, post nothing).
-  If `TRIGGER_TOKEN` is set, send `Authorization: Bearer <token>`.
+- `POST /run` – with no parameters it does whatever is due *now* (the schedule above); the response says what was posted
+  (`done: slack: leaderboard; vesta: leaderboard page 2/3`) or why not (`skipped: outside the event days (December 1-12)`).
+  Optional parameters, mainly for testing (they bypass the schedule and the event-day check):
+  `?mode=leaderboard|stars`, `?target=slack|vesta` (only that target, e.g. to test the board without posting to Slack),
+  `?lookback=8760h` (stars window for `mode=stars`, a unit is required) and `?dry=1` (fetch, post nothing).
+  A manual `mode=stars` posts even when there are no stars. If `TRIGGER_TOKEN` is set, send `Authorization: Bearer <token>`.
 - `GET /healthz`
 - Listens on `$PORT` (default 8080); shuts down gracefully on SIGTERM.
 
@@ -39,7 +46,13 @@ the [Functions docs](https://docs.functions.onstackit.cloud/basics/concepts.html
 | `VESTABOARD_API_KEY` | no | Vestaboard Read/Write key; skipped if unset |
 | `AOC_YEAR` | no | event year; default: the current year |
 | `TRIGGER_TOKEN` | no, but **set it** | protects `/run` (the function URL is public) |
-| `STARS_LOOKBACK`, `ACTIVE_FROM_HOUR`, `ACTIVE_TO_HOUR`, `TIMEZONE`, `ALWAYS_ACTIVE=true`, `AOC_USER_AGENT` | no | |
+| `EVENT_FIRST_DAY`, `EVENT_LAST_DAY` | no | December days on which the schedule is active (default `1` and `12`) |
+| `SLACK_LEADERBOARD_HOUR` | no | morning leaderboard hour (default `8`) |
+| `SLACK_STARS_FROM_HOUR`, `SLACK_STARS_TO_HOUR` | no | Slack new-stars hours, `to` exclusive (default `6` and `22`; puzzles unlock at 06:00) |
+| `VESTA_FROM_HOUR`, `VESTA_TO_HOUR`, `VESTA_WEEKDAYS_ONLY` | no | Vestaboard hours (default `8`, `17`) and Mon–Fri only (default `true`) |
+| `STARS_LOOKBACK` | no | default window for a manual `mode=stars` (default `30m`) |
+| `ALWAYS_ACTIVE=true` | no | ignore the year and event-day check (opening hours still apply) |
+| `TIMEZONE`, `AOC_USER_AGENT` | no | default `Europe/Amsterdam` |
 
 Treat `AOC_SESSION`, `SLACK_WEBHOOK_URL`, `VESTABOARD_API_KEY` and `TRIGGER_TOKEN` as secrets.
 
@@ -137,7 +150,7 @@ The deploy job starts with a **Check configuration** step that lists every missi
 | workflow | trigger | does |
 |---|---|---|
 | `deploy-stackit` | push to `master` that changes Go source (not `*_test.go`), `go.mod`/`go.sum` or the `Dockerfile`; or manual (*Run workflow*) | test → build amd64 image → push (tag = `1.0.<run number>`) → `sfn function deploy` with the runtime env |
-| `aoc-trigger` | cron every 30 min in December, or manual | `POST /run` on the function |
+| `aoc-trigger` | cron every 15 min on **December 1–12** only, or manual | `POST /run` on the function (manual inputs: `mode`, `target`, `lookback`) |
 | `cleanup-stackit` | manual only | delete the function (type its name to confirm); optionally the pull secret and the registry repository |
 
 Notes:
@@ -151,16 +164,18 @@ Notes:
   delete repositories (**not verified**).
 - Cleanup does not remove the service account, repo secrets/variables, or the committed `.stackit-functions/` manifests
   (delete those manually; they reference the removed function id).
-- The scheduled workflow only fires in December (UTC hours 06–20); the function enforces the exact Amsterdam window itself,
-  so a late or skipped GitHub tick is harmless. GitHub may pause scheduled workflows on repos with no activity for 60 days.
+- The cron (`*/15 5-21 1-12 12 *`, UTC) only fires on December 1–12; the function enforces the exact Amsterdam windows itself, so
+  a late or skipped GitHub tick is harmless. Change the day range in the workflow *and* `EVENT_LAST_DAY` if the event length changes
+  (the function would otherwise still skip those days). GitHub may pause scheduled workflows on repos with no activity for 60 days.
 
 ## Choosing the year / testing on 2025
 The year is the `AOC_YEAR` env var (default: current year). Set it permanently with the repository variable `AOC_YEAR`,
 or per deploy via *Run workflow* → `year`. To test against last year's board outside December:
-1. Run **deploy-stackit** manually with `year = 2025` (tick `always_active` if scheduled runs should post outside December too).
-2. Run **aoc-trigger** manually with `mode = leaderboard`, or `mode = stars` and `lookback = 8760h`
+1. Run **deploy-stackit** manually with `year = 2025` (tick `always_active` only if you want *scheduled* runs outside December to post).
+2. Run **aoc-trigger** manually with `mode = leaderboard`, or `mode = stars` and `lookback = 8760h` (add `target = vesta` to leave Slack alone)
    (otherwise "latest stars" only covers the last hour and is empty for old data).
-3. Redeploy with `year` empty (and the `AOC_YEAR` variable removed) before December 2026.
+3. Redeploy with `year` empty (and the `AOC_YEAR` variable removed) before December 2026. If you forget, the scheduled run refuses to post
+   (`AOC_YEAR is 2025 but it is 2026 …`) instead of reposting last year's board.
 
 `AOC_LEADERBOARD_ID` is per year – update it if the 2025 board has a different id, and make sure the session cookie
 belongs to a member of that board.
@@ -183,7 +198,7 @@ belongs to a member of that board.
 | deploy workflow never starts | it triggers on `master`; check the path filter or start it manually |
 | `advent of code returned HTTP …` | expired/wrong `AOC_SESSION`, or wrong leaderboard id/year |
 | `/run` answers 401 | missing/incorrect `Authorization: Bearer <TRIGGER_TOKEN>` |
-| `/run` answers "skipped (outside active window)" | not December or outside 08–21; use `?mode=` or `ALWAYS_ACTIVE=true` |
+| `/run` answers `skipped: …` | the reason is in the message: outside December 1–12, wrong `AOC_YEAR`, or nothing scheduled at that time (e.g. Vestaboard is Mon–Fri 08:00–17:00 on the half hour). Use `?mode=` / `?target=` to test manually |
 | "No new stars" in the test year | `lookback` too short; use `lookback=8760h` |
 
 ## Develop

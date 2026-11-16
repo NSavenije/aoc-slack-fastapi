@@ -51,10 +51,10 @@ func SlackLeaderboard(lb *Leaderboard, year int) string {
 
 func SlackStars(events []StarEvent, loc *time.Location) string {
 	if len(events) == 0 {
-		return ":star: No new stars lately. Get coding!"
+		return ":star: No new stars in this period."
 	}
 	var sb strings.Builder
-	sb.WriteString(":star: *Latest stars*\n")
+	sb.WriteString(":star: *New stars*\n")
 	for _, e := range events {
 		stars := ":star:"
 		if e.Part == 2 {

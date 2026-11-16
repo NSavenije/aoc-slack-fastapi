@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,143 +13,285 @@ import (
 	"time"
 )
 
-const fixture = `{"event":"2026","owner_id":1,"members":{
-"1":{"id":1,"name":"Bart van Dijk","stars":2,"local_score":30,"last_star_ts":1764587074,
- "completion_day_level":{"1":{"1":{"star_index":1,"get_star_ts":1764580000},"2":{"star_index":2,"get_star_ts":1764587074}}}},
-"2":{"id":2,"name":"","stars":1,"local_score":30,"last_star_ts":1764570000,
- "completion_day_level":{"1":{"1":{"star_index":3,"get_star_ts":1764570000}}}},
-"3":{"id":3,"name":"Idle","stars":0,"local_score":0,"last_star_ts":0,"completion_day_level":{}}}}`
+var ams, _ = time.LoadLocation("Europe/Amsterdam")
 
-func TestModeAlternates(t *testing.T) {
-	base := time.Date(2026, 12, 1, 9, 0, 0, 0, time.UTC)
-	a, b, c := ModeForSlot(base), ModeForSlot(base.Add(30*time.Minute)), ModeForSlot(base.Add(60*time.Minute))
-	if a == b || a != c {
-		t.Fatalf("not alternating: %s %s %s", a, b, c)
-	}
-	// anywhere inside a slot gives the same answer
-	if ModeForSlot(base.Add(29*time.Minute)) != a {
-		t.Fatal("mode changed inside a slot")
+func testConfig() Config {
+	return Config{
+		Year: 2026, Loc: ams, FirstDay: 1, LastDay: 12,
+		SlackLeaderboardHour: 8, SlackStarsFrom: 6, SlackStarsTo: 22,
+		VestaFrom: 8, VestaTo: 17, VestaWeekdaysOnly: true,
+		StarsLookback: 30 * time.Minute,
 	}
 }
 
-func TestStarsSinceAndBoards(t *testing.T) {
-	var lb Leaderboard
-	if err := json.Unmarshal([]byte(fixture), &lb); err != nil {
-		t.Fatal(err)
+func at(day, hour, min, sec int) time.Time { return time.Date(2026, 12, day, hour, min, sec, 0, ams) }
+
+func TestCalendarAssumptions(t *testing.T) {
+	if at(7, 0, 0, 0).Weekday() != time.Monday || at(5, 0, 0, 0).Weekday() != time.Saturday {
+		t.Fatal("test dates are not the weekdays the tests assume")
 	}
-	ev := lb.StarsSince(time.Unix(1764575000, 0))
-	if len(ev) != 2 || ev[0].Part != 2 || ev[0].Name != "Bart van Dijk" {
-		t.Fatalf("unexpected events: %+v", ev)
+}
+
+func TestSchedule(t *testing.T) {
+	j := &Job{Cfg: testConfig()}
+	type want struct{ slackLB, slackStars, vesta bool }
+	cases := []struct {
+		name string
+		t    time.Time
+		w    want
+	}{
+		{"Mon 05:45 too early", at(7, 5, 45, 0), want{false, false, false}},
+		{"Mon 07:45 stars only", at(7, 7, 45, 0), want{false, true, false}},
+		{"Mon 08:00 morning leaderboard + vesta", at(7, 8, 0, 20), want{true, true, true}},
+		{"Mon 08:15 slack stars only", at(7, 8, 15, 5), want{false, true, false}},
+		{"Mon 08:30 vesta slot", at(7, 8, 30, 5), want{false, true, true}},
+		{"Mon 08:45 slack stars only", at(7, 8, 45, 5), want{false, true, false}},
+		{"Mon 16:30 last vesta slot", at(7, 16, 30, 0), want{false, true, true}},
+		{"Mon 17:00 office closed", at(7, 17, 0, 0), want{false, true, false}},
+		{"Mon 21:45 last slack check", at(7, 21, 45, 0), want{false, true, false}},
+		{"Mon 22:00 slack closed", at(7, 22, 0, 0), want{false, false, false}},
+		{"Sat 10:00 weekend: slack only", at(5, 10, 0, 0), want{false, true, false}},
+		{"Sat Dec 12 last event day", at(12, 10, 15, 0), want{false, true, false}},
+		{"Sun Dec 13 after the event", at(13, 10, 0, 0), want{false, false, false}},
+		{"Nov 30 before the event", time.Date(2026, 11, 30, 10, 0, 0, 0, ams), want{false, false, false}},
 	}
-	sb := StarsBoard(ev)
-	if sb[1][18] != colorYellow || sb[1][19] != colorYellow || sb[2][19] == colorYellow {
-		t.Fatalf("star markers wrong: %v %v", sb[1], sb[2])
-	}
-	lbd := LeaderboardBoard(&lb, 2026)
-	if lbd[1][2] != vbChars['1'] { // rank right-aligned in cols 1-2
-		t.Fatalf("rank missing: %v", lbd[1])
-	}
-	if lbd[2][2] != vbChars['1'] { // tie on 30 pts -> both rank 1
-		t.Fatalf("tie should share rank: %v", lbd[2])
-	}
-	for r := range lbd {
-		if len(lbd[r]) != 22 {
-			t.Fatal("bad width")
+	for _, c := range cases {
+		p := j.autoPlan(c.t)
+		got := want{p.slackLeaderboard, p.slackStars != nil, p.vesta}
+		if got != c.w {
+			t.Errorf("%s: got %+v want %+v (reason %q)", c.name, got, c.w, p.reason)
+		}
+		if p.empty() && p.reason == "" {
+			t.Errorf("%s: empty plan without a reason", c.name)
 		}
 	}
-	if !strings.Contains(SlackLeaderboard(&lb, 2026), "anon #2") {
-		t.Fatal("anonymous member not rendered")
+
+	// windows are aligned to the slot, not to "now", so a late tick doesn't shift them
+	p := j.autoPlan(at(7, 8, 0, 40))
+	if !p.slackStars.from.Equal(at(7, 7, 45, 0)) || !p.slackStars.to.Equal(at(7, 8, 0, 0)) {
+		t.Errorf("slack window %v", *p.slackStars)
+	}
+	if !p.vestaStars.from.Equal(at(7, 7, 30, 0)) || !p.vestaStars.to.Equal(at(7, 8, 0, 0)) {
+		t.Errorf("vesta window %v", *p.vestaStars)
+	}
+
+	// forgotten AOC_YEAR (2025) in December 2026: skip and say why
+	old := testConfig()
+	old.Year = 2025
+	p = (&Job{Cfg: old}).autoPlan(at(7, 10, 0, 0))
+	if !p.empty() || !strings.Contains(p.reason, "AOC_YEAR") {
+		t.Errorf("year mismatch not caught: %+v", p)
+	}
+	// ALWAYS_ACTIVE ignores the event days/year (but not opening hours)
+	old.AlwaysActive = true
+	p = (&Job{Cfg: old}).autoPlan(time.Date(2026, 11, 14, 10, 0, 0, 0, ams))
+	if p.slackStars == nil {
+		t.Errorf("always active ignored: %+v", p)
 	}
 }
 
-func TestRunEndToEnd(t *testing.T) {
-	var mu sync.Mutex
-	got := map[string]string{}
+func member(id int, name string, score int) *Member {
+	return &Member{ID: id, Name: name, LocalScore: score, Stars: score / 10}
+}
+
+func TestBoards(t *testing.T) {
+	lb := &Leaderboard{Members: map[string]*Member{}}
+	for i := 1; i <= 12; i++ {
+		lb.Members[fmt.Sprint(i)] = member(i, fmt.Sprintf("Player%d", i), 100-i)
+	}
+	lb.Members["13"] = member(13, "", 88) // anonymous, ties with Player12
+	if LeaderboardPages(lb) != 2 {
+		t.Fatalf("pages = %d", LeaderboardPages(lb))
+	}
+	p1 := LeaderboardBoard(lb, 2026, 0, 2)
+	p2 := LeaderboardBoard(lb, 2026, 1, 2)
+	if p1[0][1] != vbChars['A'] || p1[0][2] != vbChars['O'] || p1[0][3] != vbChars['C'] {
+		t.Fatalf("title: %v", p1[0])
+	}
+	if p1[1][2] != vbChars['1'] { // rank 1 right-aligned in cols 1-2
+		t.Fatalf("p1 row1: %v", p1[1])
+	}
+	// page 2 holds ranks 11 and 12 (the tie shares rank 12), then blanks
+	if p2[1][1] != vbChars['1'] || p2[1][2] != vbChars['1'] || p2[2][1] != vbChars['1'] || p2[2][2] != vbChars['2'] || p2[3][2] != vbChars['2'] {
+		t.Fatalf("page 2: %v / %v / %v", p2[1], p2[2], p2[3])
+	}
+	for c := 1; c < 11; c++ {
+		if p2[4][c] != 0 || p2[5][c] != 0 {
+			t.Fatalf("page 2 should have empty rows 4-5: %v %v", p2[4], p2[5])
+		}
+	}
+	if !strings.Contains(SlackLeaderboard(lb, 2026), "anon #13") {
+		t.Fatal("anonymous member not rendered in Slack")
+	}
+
+	ev := []StarEvent{{"Bart van Dijk", 3, 2, time.Now()}, {"Eelco", 3, 1, time.Now()}}
+	sb := StarsBoard(ev)
+	if sb[1][18] != colorYellow || sb[1][19] != colorYellow || sb[2][18] != colorYellow || sb[2][19] == colorYellow {
+		t.Fatalf("star markers: %v %v", sb[1], sb[2])
+	}
+}
+
+func TestStarsBetweenIsHalfOpen(t *testing.T) {
+	lb := &Leaderboard{Members: map[string]*Member{
+		"1": {ID: 1, Name: "A", Completion: map[string]map[string]Star{"1": {"1": {GetStarTS: 1000}, "2": {GetStarTS: 2000}}}},
+	}}
+	got := lb.StarsBetween(time.Unix(1000, 0), time.Unix(2000, 0))
+	if len(got) != 1 || got[0].Part != 1 {
+		t.Fatalf("[from, to) violated: %+v", got)
+	}
+}
+
+// ---- end to end against fake AoC / Slack / Vestaboard servers ----
+
+type sinks struct {
+	mu     sync.Mutex
+	slack  []string
+	vesta  []Board
+	aocURL string
+	path   string
+	close  func()
+}
+
+func newSinks(t *testing.T, board string) *sinks {
+	s := &sinks{}
 	aoc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Cookie") != "session=sek" || !strings.HasSuffix(r.URL.Path, "/2026/leaderboard/private/view/42.json") {
+		s.mu.Lock()
+		s.path = r.URL.Path
+		s.mu.Unlock()
+		if r.Header.Get("Cookie") != "session=sek" {
 			http.Error(w, "bad", 403)
 			return
 		}
-		io.WriteString(w, fixture)
+		io.WriteString(w, board)
 	}))
-	defer aoc.Close()
 	sink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
-		mu.Lock()
-		got[r.URL.Path] = string(b)
-		if r.URL.Path == "/vesta" {
-			got["key"] = r.Header.Get("X-Vestaboard-Read-Write-Key")
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		switch r.URL.Path {
+		case "/slack":
+			s.slack = append(s.slack, string(b))
+		case "/vesta":
+			var bd Board
+			if err := json.Unmarshal(b, &bd); err != nil {
+				t.Errorf("bad vestaboard payload: %v", err)
+			}
+			s.vesta = append(s.vesta, bd)
 		}
-		mu.Unlock()
 	}))
-	defer sink.Close()
+	s.aocURL = aoc.URL
+	s.close = func() { aoc.Close(); sink.Close() }
+	t.Cleanup(s.close)
+	s.aocURL = aoc.URL
+	s.path = ""
+	sinkURL = sink.URL
+	return s
+}
 
-	loc, _ := time.LoadLocation("Europe/Amsterdam")
-	now := time.Date(2026, 12, 3, 10, 0, 0, 0, loc)
-	c := http.DefaultClient
-	j := &Job{
-		Cfg:   Config{Year: 2026, Loc: loc, ActiveFrom: 8, ActiveTo: 21, StarsLookback: time.Hour},
-		AoC:   &AoCClient{HTTP: c, BaseURL: aoc.URL, Year: 2026, BoardID: "42", SessionCookie: "sek", UserAgent: "t"},
-		Vesta: &Vestaboard{HTTP: c, URL: sink.URL + "/vesta", APIKey: "k"},
-		Slack: &Slack{HTTP: c, WebhookURL: sink.URL + "/slack"},
-		Now:   func() time.Time { return now },
-	}
-	mode, err := j.Run(context.Background(), ModeLeaderboard, false, 0)
-	if err != nil || mode != ModeLeaderboard {
-		t.Fatal(mode, err)
-	}
-	if !strings.Contains(got["/slack"], "leaderboard") || got["key"] != "k" {
-		t.Fatalf("sinks not hit: %v", got)
-	}
-	var rows [][]int
-	if err := json.Unmarshal([]byte(got["/vesta"]), &rows); err != nil || len(rows) != 6 || len(rows[0]) != 22 {
-		t.Fatalf("bad vestaboard payload: %v %v", err, got["/vesta"])
-	}
+var sinkURL string
 
-	// outside active hours / not December => skipped in auto mode
-	now = time.Date(2026, 12, 3, 23, 0, 0, 0, loc)
-	if m, err := j.Run(context.Background(), ModeAuto, false, 0); m != "" || err != nil {
-		t.Fatalf("expected skip, got %q %v", m, err)
-	}
-	now = time.Date(2026, 6, 3, 10, 0, 0, 0, loc)
-	if m, _ := j.Run(context.Background(), ModeAuto, false, 0); m != "" {
-		t.Fatal("should skip outside December")
+func (s *sinks) job(now *time.Time, cfg Config) *Job {
+	return &Job{
+		Cfg:   cfg,
+		AoC:   &AoCClient{HTTP: http.DefaultClient, BaseURL: s.aocURL, Year: cfg.Year, BoardID: "42", SessionCookie: "sek", UserAgent: "t"},
+		Vesta: &Vestaboard{HTTP: http.DefaultClient, URL: sinkURL + "/vesta", APIKey: "k"},
+		Slack: &Slack{HTTP: http.DefaultClient, WebhookURL: sinkURL + "/slack"},
+		Now:   func() time.Time { return *now },
 	}
 }
 
-func TestLookbackOverrideAndYear(t *testing.T) {
-	var path, slack string
-	aoc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path = r.URL.Path
-		io.WriteString(w, fixture)
-	}))
-	defer aoc.Close()
-	sink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
-		slack = string(b)
-	}))
-	defer sink.Close()
-	loc, _ := time.LoadLocation("Europe/Amsterdam")
-	now := time.Unix(1764587074+30, 0) // 30 seconds after the last fixture star (Dec 2025)
-	j := &Job{
-		Cfg:   Config{Year: 2025, Loc: loc, StarsLookback: time.Minute},
-		AoC:   &AoCClient{HTTP: http.DefaultClient, BaseURL: aoc.URL, Year: 2025, BoardID: "9", SessionCookie: "s", UserAgent: "t"},
-		Slack: &Slack{HTTP: http.DefaultClient, WebhookURL: sink.URL},
-		Now:   func() time.Time { return now },
-	}
-	if _, err := j.Run(context.Background(), ModeStars, false, 0); err != nil {
+func boardJSON(starAt time.Time) string {
+	return fmt.Sprintf(`{"event":"2026","owner_id":1,"members":{
+"1":{"id":1,"name":"Bart van Dijk","stars":2,"local_score":30,"completion_day_level":{"1":{"1":{"star_index":1,"get_star_ts":1764580000},"2":{"star_index":2,"get_star_ts":%d}}}},
+"2":{"id":2,"name":"Idle","stars":0,"local_score":0,"completion_day_level":{}}}}`, starAt.Unix())
+}
+
+func TestRunAutoFollowsTheSchedule(t *testing.T) {
+	now := at(7, 8, 0, 30) // Monday 08:00: morning leaderboard + stars + vesta slot
+	s := newSinks(t, boardJSON(at(7, 7, 50, 0)))
+	j := s.job(&now, testConfig())
+
+	res, err := j.Run(context.Background(), Options{})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasSuffix(path, "/2025/leaderboard/private/view/9.json") {
-		t.Fatalf("wrong year in AoC URL: %s", path)
+	if len(s.slack) != 2 || !strings.Contains(s.slack[0], "leaderboard") || !strings.Contains(s.slack[1], "New stars") {
+		t.Fatalf("slack: %v (actions %v)", s.slack, res.Actions)
 	}
-	if !strings.Contains(slack, "Bart van Dijk") || strings.Contains(slack, "anon") {
-		t.Fatalf("default lookback should only show the newest star: %s", slack)
+	if len(s.vesta) != 1 || s.vesta[0][1][18] != colorYellow { // star shown instead of a leaderboard page
+		t.Fatalf("vesta should show the star: %v", s.vesta)
 	}
-	if _, err := j.Run(context.Background(), ModeStars, false, 24*time.Hour*365); err != nil {
+	if !strings.HasSuffix(s.path, "/2026/leaderboard/private/view/42.json") {
+		t.Fatalf("wrong AoC url %q", s.path)
+	}
+
+	// 08:15: only Slack looks for new stars; the 07:50 star is outside [08:00, 08:15) -> silence
+	now = at(7, 8, 15, 5)
+	s.slack, s.vesta = nil, nil
+	res, err = j.Run(context.Background(), Options{})
+	if err != nil || len(s.slack) != 0 || len(s.vesta) != 0 {
+		t.Fatalf("08:15 should be silent: %v %v %v %v", s.slack, s.vesta, res, err)
+	}
+
+	// 08:30: vesta slot without a star in [08:00, 08:30) -> a leaderboard page; slack stays silent
+	now = at(7, 8, 30, 5)
+	res, err = j.Run(context.Background(), Options{})
+	if err != nil || len(s.slack) != 0 || len(s.vesta) != 1 || s.vesta[0][0][1] != vbChars['A'] {
+		t.Fatalf("08:30: %v %v %v %v", s.slack, s.vesta, res, err)
+	}
+
+	// Saturday: no vesta, slack still checks for stars
+	now = at(5, 10, 0, 5)
+	s.slack, s.vesta = nil, nil
+	if _, err = j.Run(context.Background(), Options{}); err != nil || len(s.vesta) != 0 {
+		t.Fatalf("weekend: %v %v", s.vesta, err)
+	}
+
+	// after the event: nothing, and AoC isn't even called
+	now = at(13, 10, 0, 5)
+	s.path = ""
+	res, err = j.Run(context.Background(), Options{})
+	if err != nil || len(res.Actions) != 0 || res.Reason == "" || s.path != "" {
+		t.Fatalf("after event: %+v %v path=%q", res, err, s.path)
+	}
+}
+
+func TestManualModesAndTargets(t *testing.T) {
+	now := time.Date(2026, 11, 14, 12, 0, 0, 0, ams) // not December: manual modes still work
+	s := newSinks(t, boardJSON(time.Unix(1764580000, 0)))
+	cfg := testConfig()
+	cfg.Year = 2025
+	j := s.job(&now, cfg)
+
+	// target=vesta only touches the Vestaboard
+	if _, err := j.Run(context.Background(), Options{Mode: ModeLeaderboard, Target: TargetVesta}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(slack, "anon #2") {
-		t.Fatalf("lookback override ignored: %s", slack)
+	if len(s.slack) != 0 || len(s.vesta) != 1 {
+		t.Fatalf("target=vesta: slack=%v vesta=%d", s.slack, len(s.vesta))
+	}
+	if !strings.Contains(s.path, "/2025/") {
+		t.Fatalf("configured year not used: %s", s.path)
+	}
+
+	// manual stars with a long lookback finds the old star; with a short one it still reports "none"
+	if _, err := j.Run(context.Background(), Options{Mode: ModeStars, Target: TargetSlack, Lookback: 24 * time.Hour * 365}); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.slack) != 1 || !strings.Contains(s.slack[0], "Bart van Dijk") {
+		t.Fatalf("lookback: %v", s.slack)
+	}
+	if _, err := j.Run(context.Background(), Options{Mode: ModeStars, Target: TargetSlack, Lookback: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.slack) != 2 || !strings.Contains(s.slack[1], "No new stars") {
+		t.Fatalf("empty manual stars: %v", s.slack)
+	}
+
+	// dry run: fetches but posts nothing
+	s.slack, s.vesta = nil, nil
+	res, err := j.Run(context.Background(), Options{Mode: ModeLeaderboard, Dry: true})
+	if err != nil || len(s.slack)+len(s.vesta) != 0 || len(res.Actions) != 2 {
+		t.Fatalf("dry run: %v %v %+v %v", s.slack, s.vesta, res, err)
 	}
 }

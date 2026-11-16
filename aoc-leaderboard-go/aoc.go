@@ -102,8 +102,17 @@ type StarEvent struct {
 	At   time.Time
 }
 
+// StarsBetween lists stars earned in [from, to), newest first.
+func (lb *Leaderboard) StarsBetween(from, to time.Time) []StarEvent {
+	return lb.stars(func(at time.Time) bool { return !at.Before(from) && at.Before(to) })
+}
+
 // StarsSince lists all stars earned strictly after `since`, newest first.
 func (lb *Leaderboard) StarsSince(since time.Time) []StarEvent {
+	return lb.stars(func(at time.Time) bool { return at.After(since) })
+}
+
+func (lb *Leaderboard) stars(keep func(time.Time) bool) []StarEvent {
 	var out []StarEvent
 	for _, m := range lb.Members {
 		for dayStr, parts := range m.Completion {
@@ -117,7 +126,7 @@ func (lb *Leaderboard) StarsSince(since time.Time) []StarEvent {
 					continue
 				}
 				at := time.Unix(s.GetStarTS, 0)
-				if at.After(since) {
+				if keep(at) {
 					out = append(out, StarEvent{m.DisplayName(), day, part, at})
 				}
 			}
