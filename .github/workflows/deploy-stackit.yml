@@ -156,8 +156,41 @@ jobs:
           # TRIGGER_TOKEN is the name the app reads; the GitHub secret is AOC_TRIGGER_TOKEN.
           echo "Deploying $IMAGE_REF with variables: $(printf '%s ' "${env_args[@]}" | grep -o -- '--env [A-Z_]*' | cut -d' ' -f2 | tr '\n' ' ')"
           sfn --version
+
+          # `sfn function deploy` only waits ~2 minutes for the revision, but starting it can take longer
+          # (the revision still comes up afterwards), so don't let the CLI wait: create the revision,
+          # then poll the function until it is Active on a *new* revision (up to 10 minutes).
+          describe() { sfn functions describe --no-interactive --no-progress --function-name "$FUNC_NAME" 2>&1; }
+          field() { awk -F'│' -v k="$1" '{ key=$1; gsub(/^ +| +$/, "", key); if (key == k) { v=$2; gsub(/^ +| +$/, "", v); print v; exit } }'; }
+          before=$(describe | field "Current Revision" || true)
+
           sfn function deploy \
-            --no-interactive --no-progress \
+            --no-interactive --no-progress --no-wait \
             --function-name "$FUNC_NAME" \
             --image "$IMAGE_REF" \
             "${env_args[@]}"
+
+          deadline=$((SECONDS + 600))
+          while :; do
+            out=$(describe) || out=""
+            state=$(field State <<<"$out"); rev=$(field "Current Revision" <<<"$out"); err=$(field Error <<<"$out")
+            echo "state=${state:-?} revision=${rev:-?} error=${err:-?}"
+            if [ "$state" = "Active" ] && [ -n "$rev" ] && [ "$rev" != "$before" ]; then
+              echo "Revision $rev is Active."
+              break
+            fi
+            if [ -n "$err" ] && [ "$err" != "<not set>" ]; then
+              echo "::error::function reports an error: $err"; exit 1
+            fi
+            case "$state" in *ail*|*rror*) echo "::error::function state is '$state'"; exit 1;; esac
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::revision not Active after 10 minutes (state='${state:-?}', revision='${rev:-?}', previous='${before:-?}')"; exit 1
+            fi
+            sleep 10
+          done
+
+          # final smoke test: the new revision answers
+          url=$(field URL <<<"$out")
+          if [ -n "$url" ]; then
+            curl --fail --silent --show-error --max-time 30 --retry 6 --retry-delay 10 --retry-all-errors "${url%/}/healthz" && echo " <- /healthz"
+          fi

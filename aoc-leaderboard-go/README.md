@@ -160,6 +160,10 @@ Notes:
   log lists variable *names* only). `--env-file` was tried first and did **not** work: the revision never became ready, apparently
   because the variables didn't arrive and the app exits at startup without `AOC_LEADERBOARD_ID`/`AOC_SESSION`. The same image
   ran fine on STACKIT Functions when started with `--env`.
+- `sfn function deploy` only waits about 2 minutes for a revision, but starting one can take longer (`Error: Function revision deployment
+  timed out`, although it comes up afterwards). The workflow therefore deploys with `--no-wait` and polls
+  `sfn functions describe` for up to 10 minutes until the state is `Active` on a *new* revision, then calls `/healthz`. It fails
+  early if the state contains "fail"/"error" or the `Error` field is set.
 - Registry deletion in `cleanup-stackit` assumes the Harbor API of STACKIT Container Registry and a registry account that may
   delete repositories (**not verified**).
 - Cleanup does not remove the service account, repo secrets/variables, or the committed `.stackit-functions/` manifests
@@ -191,6 +195,7 @@ belongs to a member of that board.
 | `unexpected value 'false' for '--build'` | `--build`/`--push` are bare flags in `sfn`; the docs' `--build=false` example is wrong. The workflow uses `FUNC_BUILD=false` / `FUNC_PUSH=false` instead |
 | `oci image reference invalid … Invalid tag` | the tag isn't SemVer (a commit SHA fails); the pipeline uses `1.0.<run number>` |
 | revision stays `Creating` (ingress answers `404` from `istio-envoy`, no logs) | the container isn't starting; most often the required variables didn't reach it (the app exits without `AOC_LEADERBOARD_ID`/`AOC_SESSION`). Use `--env`, not `--env-file`; verify with `curl <function-url>/healthz` (should be `ok`) |
+| deploy log: `Function revision deployment timed out` (older workflow versions) | the revision was created and usually comes up a few minutes later; check `sfn functions list` (State `Active`). Current workflows poll instead of failing |
 | `denied` while `sfn` pulls `ghcr.io/stackitcloud/functions-builder` (only when building templates locally) | stale ghcr.io login in Docker: `docker logout ghcr.io` |
 | `aoc-trigger` is green but nothing is posted | older versions of the workflow hid redirects/empty replies; the current one prints the HTTP status and body and fails on anything but a 2xx with a body. Check `AOC_FUNCTION_URL` starts with `https://`, and `lookback` has a unit (`8760h`, not `8760`) |
 | deploy: `Deploy not configured` | the error lists the missing variables/secrets (Settings → Secrets and variables → Actions) |
