@@ -147,6 +147,8 @@ type sinks struct {
 	mu     sync.Mutex
 	slack  []string
 	vesta  []Board
+	vbHdr  http.Header
+	vbBody string
 	aocURL string
 	path   string
 	close  func()
@@ -173,7 +175,14 @@ func newSinks(t *testing.T, board string) *sinks {
 			s.slack = append(s.slack, string(b))
 		case "/vesta":
 			var bd Board
-			if err := json.Unmarshal(b, &bd); err != nil {
+			s.vbHdr, s.vbBody = r.Header.Clone(), string(b)
+			if strings.HasPrefix(string(b), "{") { // Cloud API: {"characters": [[...]]}
+				var o struct{ Characters Board }
+				if err := json.Unmarshal(b, &o); err != nil {
+					t.Errorf("bad vestaboard payload: %v", err)
+				}
+				bd = o.Characters
+			} else if err := json.Unmarshal(b, &bd); err != nil { // legacy: bare array
 				t.Errorf("bad vestaboard payload: %v", err)
 			}
 			s.vesta = append(s.vesta, bd)
@@ -310,5 +319,54 @@ func TestVestaboardErrorShowsAnswerButNotKey(t *testing.T) {
 	_, err := v.Send(context.Background(), Board{})
 	if err == nil || !strings.Contains(err.Error(), "HTTP 401") || !strings.Contains(err.Error(), "invalid key") || strings.Contains(err.Error(), "SECRET-KEY") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestVestaboardCloudAndLegacyRequests(t *testing.T) {
+	var gotHdr http.Header
+	var gotBody string
+	var gotPath string
+	status := http.StatusOK
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotHdr, gotBody, gotPath = r.Header.Clone(), string(b), r.URL.Path
+		w.WriteHeader(status)
+		io.WriteString(w, `{"status":"ok","id":"x"}`)
+	}))
+	defer srv.Close()
+	var board Board
+	board[0][1] = 7
+
+	// Cloud API (default): token header + {"characters": ...}; "forced" only when asked for
+	v := &Vestaboard{HTTP: http.DefaultClient, URL: srv.URL, APIKey: "tok"}
+	if _, err := v.Send(context.Background(), board); err != nil {
+		t.Fatal(err)
+	}
+	if gotHdr.Get("X-Vestaboard-Token") != "tok" || gotHdr.Get("X-Vestaboard-Read-Write-Key") != "" {
+		t.Fatalf("cloud headers: %v", gotHdr)
+	}
+	if !strings.HasPrefix(gotBody, `{"characters":[[0,7,0,`) || strings.Contains(gotBody, "forced") {
+		t.Fatalf("cloud body: %.60s", gotBody)
+	}
+	v.Force = true
+	if _, err := v.Send(context.Background(), board); err != nil || !strings.HasSuffix(gotBody, `,"forced":true}`) {
+		t.Fatalf("forced body: %v %.30s...%s", err, gotBody, gotBody[len(gotBody)-30:])
+	}
+
+	// Legacy API: old header, bare array
+	v = &Vestaboard{HTTP: http.DefaultClient, URL: srv.URL, APIKey: "old", Legacy: true}
+	if _, err := v.Send(context.Background(), board); err != nil {
+		t.Fatal(err)
+	}
+	if gotHdr.Get("X-Vestaboard-Read-Write-Key") != "old" || gotHdr.Get("X-Vestaboard-Token") != "" || !strings.HasPrefix(gotBody, "[[0,7,0,") {
+		t.Fatalf("legacy request: %v %.30s", gotHdr, gotBody)
+	}
+	_ = gotPath
+
+	// muted board: 423 explains how to override
+	status = http.StatusLocked
+	v = &Vestaboard{HTTP: http.DefaultClient, URL: srv.URL, APIKey: "tok"}
+	if _, err := v.Send(context.Background(), board); err == nil || !strings.Contains(err.Error(), "VESTABOARD_FORCE") {
+		t.Fatalf("423 not explained: %v", err)
 	}
 }

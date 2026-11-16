@@ -126,20 +126,39 @@ func StarsBoard(events []StarEvent) Board {
 	return b
 }
 
+// Vestaboard posts boards through the Vestaboard Cloud API
+// (https://docs.vestaboard.com/docs/read-write-api/endpoints): POST https://cloud.vestaboard.com/
+// with the token in X-Vestaboard-Token and {"characters": [[...]]} as body.
 type Vestaboard struct {
 	HTTP   *http.Client
-	URL    string // default https://rw.vestaboard.com/
+	URL    string // default https://cloud.vestaboard.com/ (https://rw.vestaboard.com/ in legacy mode)
 	APIKey string
+	// Force sends the message even while the board is muted or in quiet hours
+	// (otherwise the API rejects it with HTTP 423). Cloud API only.
+	Force bool
+	// Legacy uses the old Read/Write API that last year's version used: rw.vestaboard.com,
+	// X-Vestaboard-Read-Write-Key header and a bare array as body.
+	Legacy bool
 }
 
 // Send posts the board. On success it returns a short description of the API's answer
 // ("HTTP 200 {...}") so it can be shown in the run result; the API key is never part of it.
 func (v *Vestaboard) Send(ctx context.Context, b Board) (string, error) {
-	url := v.URL
-	if url == "" {
-		url = "https://rw.vestaboard.com/"
+	url, header := v.URL, "X-Vestaboard-Token"
+	var payload any = struct {
+		Characters Board `json:"characters"`
+		Forced     bool  `json:"forced,omitempty"`
+	}{b, v.Force}
+	if v.Legacy {
+		header, payload = "X-Vestaboard-Read-Write-Key", b
+		if url == "" {
+			url = "https://rw.vestaboard.com/"
+		}
 	}
-	body, err := json.Marshal(b)
+	if url == "" {
+		url = "https://cloud.vestaboard.com/"
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
 	}
@@ -147,7 +166,7 @@ func (v *Vestaboard) Send(ctx context.Context, b Board) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("X-Vestaboard-Read-Write-Key", v.APIKey)
+	req.Header.Set(header, v.APIKey)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := v.HTTP.Do(req)
 	if err != nil {
@@ -156,7 +175,10 @@ func (v *Vestaboard) Send(ctx context.Context, b Board) (string, error) {
 	defer resp.Body.Close()
 	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 300))
 	answer := fmt.Sprintf("HTTP %d %s", resp.StatusCode, strings.Join(strings.Fields(string(snippet)), " "))
-	if resp.StatusCode/100 != 2 {
+	switch {
+	case resp.StatusCode == http.StatusLocked:
+		return "", fmt.Errorf("vestaboard is muted / in quiet hours, answered %s (set VESTABOARD_FORCE=true to send anyway)", answer)
+	case resp.StatusCode/100 != 2:
 		return "", fmt.Errorf("vestaboard answered %s", answer)
 	}
 	return answer, nil
