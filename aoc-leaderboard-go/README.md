@@ -176,6 +176,7 @@ belongs to a member of that board.
 | `oci image reference invalid … Invalid tag` | the tag isn't SemVer (a commit SHA fails); the pipeline uses `1.0.<run number>` |
 | revision stays `Creating` (ingress answers `404` from `istio-envoy`, no logs) | the container isn't starting; most often the required variables didn't reach it (the app exits without `AOC_LEADERBOARD_ID`/`AOC_SESSION`). Use `--env`, not `--env-file`; verify with `curl <function-url>/healthz` (should be `ok`) |
 | `denied` while `sfn` pulls `ghcr.io/stackitcloud/functions-builder` (only when building templates locally) | stale ghcr.io login in Docker: `docker logout ghcr.io` |
+| `aoc-trigger` is green but nothing is posted | older versions of the workflow hid redirects/empty replies; the current one prints the HTTP status and body and fails on anything but a 2xx with a body. Check `AOC_FUNCTION_URL` starts with `https://`, and `lookback` has a unit (`8760h`, not `8760`) |
 | deploy: `Deploy not configured` | the error lists the missing variables/secrets (Settings → Secrets and variables → Actions) |
 | `docker login` / push denied | wrong push-robot credentials, or the robot lacks Repository → Push |
 | deploy workflow never starts | it triggers on `master`; check the path filter or start it manually |
