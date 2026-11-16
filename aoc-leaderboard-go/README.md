@@ -198,6 +198,7 @@ belongs to a member of that board.
 | deploy log: `Function revision deployment timed out` (older workflow versions) | the revision was created and usually comes up a few minutes later; check `sfn functions list` (State `Active`). Current workflows poll instead of failing |
 | `denied` while `sfn` pulls `ghcr.io/stackitcloud/functions-builder` (only when building templates locally) | stale ghcr.io login in Docker: `docker logout ghcr.io` |
 | `aoc-trigger` is green but nothing is posted | older versions of the workflow hid redirects/empty replies; the current one prints the HTTP status and body and fails on anything but a 2xx with a body. Check `AOC_FUNCTION_URL` starts with `https://`, and `lookback` has a unit (`8760h`, not `8760`) |
+| run says `vesta: … -> HTTP 200 {…}` but the board doesn't change | the API accepted the message, so look at the board side: is the key the *Read/Write* key of this board (Vestaboard app → Settings → API), is the board online / in quiet hours or paused? Read back what the cloud thinks is on the board: `Invoke-RestMethod https://rw.vestaboard.com/ -Headers @{"X-Vestaboard-Read-Write-Key"=$key}` |
 | deploy: `Deploy not configured` | the error lists the missing variables/secrets (Settings → Secrets and variables → Actions) |
 | `docker login` / push denied | wrong push-robot credentials, or the robot lacks Repository → Push |
 | deploy workflow never starts | it triggers on `master`; check the path filter or start it manually |

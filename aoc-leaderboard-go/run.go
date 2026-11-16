@@ -172,27 +172,32 @@ func (j *Job) Run(ctx context.Context, o Options) (Result, error) {
 
 	var res Result
 	var errs []error
-	do := func(label string, send func() error) {
+	do := func(label string, send func() (string, error)) {
 		if o.Dry {
 			res.Actions = append(res.Actions, label+" (dry run)")
 			return
 		}
-		if err := send(); err != nil {
+		answer, err := send()
+		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", label, err))
 			return
 		}
+		if answer != "" {
+			label += " -> " + answer
+		}
 		res.Actions = append(res.Actions, label)
 	}
+	noAnswer := func(err error) (string, error) { return "", err }
 
 	// Slack
 	if j.Slack != nil {
 		if p.slackLeaderboard {
-			do("slack: leaderboard", func() error { return j.Slack.Send(ctx, SlackLeaderboard(lb, j.Cfg.Year)) })
+			do("slack: leaderboard", func() (string, error) { return noAnswer(j.Slack.Send(ctx, SlackLeaderboard(lb, j.Cfg.Year))) })
 		}
 		if p.slackStars != nil {
 			ev := lb.StarsBetween(p.slackStars.from, p.slackStars.to)
 			if len(ev) > 0 || p.postEmpty {
-				do(fmt.Sprintf("slack: %d new stars", len(ev)), func() error { return j.Slack.Send(ctx, SlackStars(ev, j.Cfg.Loc)) })
+				do(fmt.Sprintf("slack: %d new stars", len(ev)), func() (string, error) { return noAnswer(j.Slack.Send(ctx, SlackStars(ev, j.Cfg.Loc))) })
 			}
 		}
 	} else if p.slackLeaderboard || p.slackStars != nil {
@@ -216,7 +221,7 @@ func (j *Job) Run(ctx context.Context, o Options) (Result, error) {
 				page := int((now.Unix() / int64(vestaSlot/time.Second)) % int64(pages))
 				board, label = LeaderboardBoard(lb, j.Cfg.Year, page, pages), fmt.Sprintf("vesta: leaderboard page %d/%d", page+1, pages)
 			}
-			do(label, func() error { return j.Vesta.Send(ctx, board) })
+			do(label, func() (string, error) { return j.Vesta.Send(ctx, board) })
 		}
 	}
 	slog.Info("run", "actions", strings.Join(res.Actions, "; "))

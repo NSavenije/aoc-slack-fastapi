@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 )
@@ -131,28 +132,32 @@ type Vestaboard struct {
 	APIKey string
 }
 
-func (v *Vestaboard) Send(ctx context.Context, b Board) error {
+// Send posts the board. On success it returns a short description of the API's answer
+// ("HTTP 200 {...}") so it can be shown in the run result; the API key is never part of it.
+func (v *Vestaboard) Send(ctx context.Context, b Board) (string, error) {
 	url := v.URL
 	if url == "" {
 		url = "https://rw.vestaboard.com/"
 	}
 	body, err := json.Marshal(b)
 	if err != nil {
-		return err
+		return "", err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return "", err
 	}
 	req.Header.Set("X-Vestaboard-Read-Write-Key", v.APIKey)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := v.HTTP.Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
+	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 300))
+	answer := fmt.Sprintf("HTTP %d %s", resp.StatusCode, strings.Join(strings.Fields(string(snippet)), " "))
 	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("vestaboard returned HTTP %d", resp.StatusCode)
+		return "", fmt.Errorf("vestaboard answered %s", answer)
 	}
-	return nil
+	return answer, nil
 }
