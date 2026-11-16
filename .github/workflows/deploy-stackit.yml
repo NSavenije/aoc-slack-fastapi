@@ -20,7 +20,7 @@ on:
         required: false
         default: ""
       always_active:
-        description: "Post outside December / opening hours (for testing, e.g. with year 2025)"
+        description: "Ignore the year/event-day check (for testing outside December, e.g. with year 2025); opening hours still apply"
         type: boolean
         default: false
 

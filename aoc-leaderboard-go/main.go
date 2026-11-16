@@ -46,7 +46,7 @@ func newJob() *Job {
 		os.Exit(1)
 	}
 	year := atoi(env("AOC_YEAR", ""), time.Now().In(loc).Year())
-	lookback, err := time.ParseDuration(env("STARS_LOOKBACK", "60m"))
+	lookback, err := time.ParseDuration(env("STARS_LOOKBACK", "30m"))
 	if err != nil {
 		slog.Error("bad STARS_LOOKBACK", "err", err)
 		os.Exit(1)
@@ -55,10 +55,16 @@ func newJob() *Job {
 	j := &Job{
 		Cfg: Config{
 			Year: year, Loc: loc,
-			ActiveFrom:    atoi(env("ACTIVE_FROM_HOUR", "8"), 8),
-			ActiveTo:      atoi(env("ACTIVE_TO_HOUR", "21"), 21),
-			StarsLookback: lookback,
-			AlwaysActive:  env("ALWAYS_ACTIVE", "") == "true",
+			FirstDay:             atoi(env("EVENT_FIRST_DAY", ""), 1),
+			LastDay:              atoi(env("EVENT_LAST_DAY", ""), 12),
+			SlackLeaderboardHour: atoi(env("SLACK_LEADERBOARD_HOUR", ""), 8),
+			SlackStarsFrom:       atoi(env("SLACK_STARS_FROM_HOUR", ""), 6),
+			SlackStarsTo:         atoi(env("SLACK_STARS_TO_HOUR", ""), 22),
+			VestaFrom:            atoi(env("VESTA_FROM_HOUR", ""), 8),
+			VestaTo:              atoi(env("VESTA_TO_HOUR", ""), 17),
+			VestaWeekdaysOnly:    env("VESTA_WEEKDAYS_ONLY", "true") != "false",
+			StarsLookback:        lookback,
+			AlwaysActive:         env("ALWAYS_ACTIVE", "") == "true",
 		},
 		AoC: &AoCClient{
 			HTTP: client, Year: year,
@@ -88,7 +94,7 @@ func main() {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintln(w, "ok")
 	})
-	// POST /run[?mode=leaderboard|stars][&dry=1] — called by the platform's schedule.
+	// POST /run[?mode=leaderboard|stars][&target=slack|vesta][&lookback=8760h][&dry=1] — called by the schedule.
 	mux.HandleFunc("POST /run", func(w http.ResponseWriter, r *http.Request) {
 		if token != "" {
 			got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -99,26 +105,39 @@ func main() {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 		defer cancel()
-		var lookback time.Duration
-		if v := r.URL.Query().Get("lookback"); v != "" {
+		q := r.URL.Query()
+		opts := Options{Mode: Mode(q.Get("mode")), Target: Target(q.Get("target")), Dry: q.Get("dry") == "1"}
+		switch opts.Mode {
+		case ModeAuto, ModeLeaderboard, ModeStars:
+		default:
+			http.Error(w, "bad mode (use leaderboard or stars, or omit)", http.StatusBadRequest)
+			return
+		}
+		switch opts.Target {
+		case TargetBoth, TargetSlack, TargetVesta:
+		default:
+			http.Error(w, "bad target (use slack or vesta, or omit)", http.StatusBadRequest)
+			return
+		}
+		if v := q.Get("lookback"); v != "" {
 			d, err := time.ParseDuration(v)
 			if err != nil {
 				http.Error(w, "bad lookback: "+err.Error(), http.StatusBadRequest)
 				return
 			}
-			lookback = d
+			opts.Lookback = d
 		}
-		mode, err := job.Run(ctx, Mode(r.URL.Query().Get("mode")), r.URL.Query().Get("dry") == "1", lookback)
+		res, err := job.Run(ctx, opts)
 		if err != nil {
-			slog.Error("run failed", "err", err)
+			slog.Error("run failed", "err", err, "done", res.Actions)
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		if mode == "" {
-			fmt.Fprintln(w, "skipped (outside active window)")
+		if len(res.Actions) == 0 {
+			fmt.Fprintf(w, "skipped: %s\n", res.Reason)
 			return
 		}
-		fmt.Fprintf(w, "posted %s\n", mode)
+		fmt.Fprintf(w, "done: %s\n", strings.Join(res.Actions, "; "))
 	})
 
 	addr := ":" + env("PORT", "8080")

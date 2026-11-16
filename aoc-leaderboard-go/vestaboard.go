@@ -71,20 +71,38 @@ func shortName(n string) string {
 	return strings.ReplaceAll(n, " ", "")
 }
 
-// LeaderboardBoard renders the top 10 in two columns of five (rank + 7 chars).
-func LeaderboardBoard(lb *Leaderboard, year int) Board {
-	b := frame(fmt.Sprintf("ADVENT OF CODE %d!", year))
+// LeaderboardPages is the number of 10-entry pages the leaderboard needs (at least 1).
+func LeaderboardPages(lb *Leaderboard) int {
+	n := (len(lb.Members) + 9) / 10
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
+
+// LeaderboardBoard renders one page (0-based) of ten entries in two columns of five
+// (rank + 7 chars). Ranks are global and ties share a rank.
+func LeaderboardBoard(lb *Leaderboard, year, page, pages int) Board {
+	title := fmt.Sprintf("ADVENT OF CODE %d!", year)
+	if pages > 1 {
+		title = fmt.Sprintf("AOC %d  PAGE %d/%d", year, page+1, pages)
+	}
+	b := frame(title)
 	ranked := lb.Ranked()
-	prevScore, prevRank := -1, 0
-	for i := 0; i < 10 && i < len(ranked); i++ {
-		m := ranked[i]
-		rank := i + 1
-		if m.LocalScore == prevScore {
-			rank = prevRank // tie
+	ranks := make([]int, len(ranked))
+	for i, m := range ranked {
+		ranks[i] = i + 1
+		if i > 0 && m.LocalScore == ranked[i-1].LocalScore {
+			ranks[i] = ranks[i-1]
 		}
-		prevScore, prevRank = m.LocalScore, rank
-		cell := text(fmt.Sprintf("%2d %-7.7s", rank, shortName(m.DisplayName())), 10)
-		row, col := 1+i%5, 1+(i/5)*10
+	}
+	for k := 0; k < 10; k++ {
+		i := page*10 + k
+		if i >= len(ranked) {
+			break
+		}
+		cell := text(fmt.Sprintf("%2d %-7.7s", ranks[i], shortName(ranked[i].DisplayName())), 10)
+		row, col := 1+k%5, 1+(k/5)*10
 		copy(b[row][col:col+10], cell)
 	}
 	return b

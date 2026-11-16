@@ -1,21 +1,25 @@
 # STACKIT Functions only supports HTTP triggers and scales to zero, so something
-# external must call the function every half hour. The function itself decides
-# (from the clock) whether it is a leaderboard or a latest-stars slot, and skips
-# runs outside its active window, so a late or missed tick is harmless.
+# external must call the function. The function decides from the clock what is due
+# (see aoc-leaderboard-go/README.md): Slack leaderboard each morning, Slack new stars every
+# 15 minutes, Vestaboard every half hour Mon-Fri 08:00-17:00. Late or skipped ticks are harmless.
 name: aoc-trigger
 on:
   schedule:
-    # every 30 min, December only; hours are UTC (08-21 Amsterdam = 07-20 UTC in
-    # winter) with a margin. The function enforces the exact window.
-    - cron: "*/30 6-20 * 12 *"
+    # Every 15 minutes on December 1-12 only. Hours are UTC (06:00-22:59 Amsterdam in winter);
+    # the function enforces the exact windows. Change the day range if the event length changes.
+    - cron: "*/15 5-21 1-12 12 *"
   workflow_dispatch:
     inputs:
       mode:
-        description: "Force leaderboard or stars (empty = automatic)"
+        description: "Force leaderboard or stars (empty = automatic, follows the schedule)"
+        required: false
+        default: ""
+      target:
+        description: "Only slack or only vesta (empty = both). Use vesta to test the board without posting to Slack"
         required: false
         default: ""
       lookback:
-        description: "Stars lookback WITH a unit, e.g. 8760h (a bare number like 8760 is rejected)"
+        description: "Stars lookback WITH a unit, e.g. 8760h (a bare number like 8760 is rejected); manual stars only"
         required: false
         default: ""
 jobs:
@@ -27,6 +31,7 @@ jobs:
           FUNCTION_URL: ${{ secrets.AOC_FUNCTION_URL }}   # https://<id>.functions.onstackit.cloud
           TRIGGER_TOKEN: ${{ secrets.AOC_TRIGGER_TOKEN }}
           MODE: ${{ github.event.inputs.mode }}
+          TARGET: ${{ github.event.inputs.target }}
           LOOKBACK: ${{ github.event.inputs.lookback }}
         run: |
           # Be strict: a redirect (e.g. http:// instead of https://) or an empty reply must not look like success.
@@ -40,6 +45,7 @@ jobs:
           fi
           query=()
           [ -z "$MODE" ] || query+=(--data-urlencode "mode=${MODE}")
+          [ -z "$TARGET" ] || query+=(--data-urlencode "target=${TARGET}")
           [ -z "$LOOKBACK" ] || query+=(--data-urlencode "lookback=${LOOKBACK}")
           for attempt in 1 2 3; do
             status=$(curl --silent --show-error --max-time 90 -o response.txt -w '%{http_code}' \
