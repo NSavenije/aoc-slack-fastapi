@@ -117,31 +117,6 @@ jobs:
           sfn auth login --no-interactive --service-account-key-path "$RUNNER_TEMP/sa-key.json"
           rm -f "$RUNNER_TEMP/sa-key.json"
 
-      - name: Write runtime environment file
-        env:
-          AOC_LEADERBOARD_ID: ${{ vars.AOC_LEADERBOARD_ID || secrets.AOC_LEADERBOARD_ID }}  # variable or secret
-          AOC_SESSION: ${{ secrets.AOC_SESSION }}
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          VESTABOARD_API_KEY: ${{ secrets.VESTABOARD_API_KEY }}
-          TRIGGER_TOKEN: ${{ secrets.AOC_TRIGGER_TOKEN }}
-          AOC_YEAR: ${{ github.event.inputs.year || vars.AOC_YEAR }}
-          ALWAYS_ACTIVE: ${{ github.event.inputs.always_active == 'true' && 'true' || vars.ALWAYS_ACTIVE }}
-        run: |
-          umask 077
-          for v in AOC_LEADERBOARD_ID AOC_SESSION TRIGGER_TOKEN; do
-            [ -n "${!v}" ] || { echo "::error::secret for $v is not set"; exit 1; }
-          done
-          {
-            echo "AOC_LEADERBOARD_ID=$AOC_LEADERBOARD_ID"
-            echo "AOC_SESSION=$AOC_SESSION"
-            echo "SLACK_WEBHOOK_URL=$SLACK_WEBHOOK_URL"
-            echo "VESTABOARD_API_KEY=$VESTABOARD_API_KEY"
-            echo "TRIGGER_TOKEN=$TRIGGER_TOKEN"
-            # optional settings: only written when set
-            [ -z "$AOC_YEAR" ] || echo "AOC_YEAR=$AOC_YEAR"
-            [ -z "$ALWAYS_ACTIVE" ] || echo "ALWAYS_ACTIVE=$ALWAYS_ACTIVE"
-          } > .deploy.env
-
       - name: Deploy new revision
         env:
           # Registry credentials the CLI uses to resolve the pushed image.
@@ -152,15 +127,30 @@ jobs:
           # so switch them off through their documented environment variables instead.
           FUNC_BUILD: "false"
           FUNC_PUSH: "false"
+          # Runtime configuration of the function (see aoc-leaderboard-go/README.md)
+          AOC_LEADERBOARD_ID: ${{ vars.AOC_LEADERBOARD_ID || secrets.AOC_LEADERBOARD_ID }}  # variable or secret
+          AOC_SESSION: ${{ secrets.AOC_SESSION }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          VESTABOARD_API_KEY: ${{ secrets.VESTABOARD_API_KEY }}
+          TRIGGER_TOKEN: ${{ secrets.AOC_TRIGGER_TOKEN }}
+          AOC_YEAR: ${{ github.event.inputs.year || vars.AOC_YEAR }}
+          ALWAYS_ACTIVE: ${{ github.event.inputs.always_active == 'true' && 'true' || vars.ALWAYS_ACTIVE }}
         run: |
+          # Variables are passed with repeated --env KEY=VALUE flags. (`--env-file` was tried first:
+          # the revision never became ready, the app exits at startup when AOC_LEADERBOARD_ID/AOC_SESSION
+          # are missing; the same image works with --env.) Empty optional values are left out.
+          for v in AOC_LEADERBOARD_ID AOC_SESSION TRIGGER_TOKEN; do
+            [ -n "${!v}" ] || { echo "::error::$v is not set"; exit 1; }
+          done
+          env_args=()
+          for v in AOC_LEADERBOARD_ID AOC_SESSION TRIGGER_TOKEN SLACK_WEBHOOK_URL VESTABOARD_API_KEY AOC_YEAR ALWAYS_ACTIVE; do
+            [ -z "${!v}" ] || env_args+=(--env "$v=${!v}")
+          done
+          # TRIGGER_TOKEN is the name the app reads; the GitHub secret is AOC_TRIGGER_TOKEN.
+          echo "Deploying $IMAGE_REF with variables: $(printf '%s ' "${env_args[@]}" | grep -o -- '--env [A-Z_]*' | cut -d' ' -f2 | tr '\n' ' ')"
           sfn --version
-          sfn function deploy --help | grep -E -- '--(build|push|image|env-file)\b' || true
           sfn function deploy \
             --no-interactive --no-progress \
             --function-name "$FUNC_NAME" \
             --image "$IMAGE_REF" \
-            --env-file .deploy.env
-
-      - name: Remove env file
-        if: always()
-        run: rm -f .deploy.env
+            "${env_args[@]}"
