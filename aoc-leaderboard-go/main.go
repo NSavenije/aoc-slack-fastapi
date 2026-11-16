@@ -75,7 +75,11 @@ func newJob() *Job {
 		Now: time.Now,
 	}
 	if k := os.Getenv("VESTABOARD_API_KEY"); k != "" {
-		j.Vesta = &Vestaboard{HTTP: client, APIKey: k}
+		j.Vesta = &Vestaboard{
+			HTTP: client, APIKey: k, URL: os.Getenv("VESTABOARD_URL"),
+			Force:  env("VESTABOARD_FORCE", "") == "true",
+			Legacy: env("VESTABOARD_LEGACY", "") == "true",
+		}
 	}
 	if u := os.Getenv("SLACK_WEBHOOK_URL"); u != "" {
 		j.Slack = &Slack{HTTP: client, WebhookURL: u}

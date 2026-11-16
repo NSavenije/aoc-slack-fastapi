@@ -139,6 +139,8 @@ jobs:
           AOC_SESSION: ${{ secrets.AOC_SESSION }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           VESTABOARD_API_KEY: ${{ secrets.VESTABOARD_API_KEY }}
+          VESTABOARD_FORCE: ${{ vars.VESTABOARD_FORCE }}     # optional: "true" = also post while muted / quiet hours
+          VESTABOARD_LEGACY: ${{ vars.VESTABOARD_LEGACY }}   # optional: "true" = old Read/Write API (rw.vestaboard.com)
           TRIGGER_TOKEN: ${{ secrets.AOC_TRIGGER_TOKEN }}
           AOC_YEAR: ${{ github.event.inputs.year || vars.AOC_YEAR }}
           ALWAYS_ACTIVE: ${{ github.event.inputs.always_active == 'true' && 'true' || vars.ALWAYS_ACTIVE }}
@@ -150,7 +152,7 @@ jobs:
             [ -n "${!v}" ] || { echo "::error::$v is not set"; exit 1; }
           done
           env_args=()
-          for v in AOC_LEADERBOARD_ID AOC_SESSION TRIGGER_TOKEN SLACK_WEBHOOK_URL VESTABOARD_API_KEY AOC_YEAR ALWAYS_ACTIVE; do
+          for v in AOC_LEADERBOARD_ID AOC_SESSION TRIGGER_TOKEN SLACK_WEBHOOK_URL VESTABOARD_API_KEY VESTABOARD_FORCE VESTABOARD_LEGACY AOC_YEAR ALWAYS_ACTIVE; do
             [ -z "${!v}" ] || env_args+=(--env "$v=${!v}")
           done
           # TRIGGER_TOKEN is the name the app reads; the GitHub secret is AOC_TRIGGER_TOKEN.

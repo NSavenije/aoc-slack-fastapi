@@ -20,7 +20,7 @@ the same window, they are reported twice. GitHub's scheduler occasionally does e
 ```
 GitHub Actions cron (aoc-trigger) ──POST /run──▶ STACKIT Function (this container) ──▶ adventofcode.com
                                                                     ├──▶ Slack (incoming webhook)
-GitHub Actions (deploy-stackit) ──build/push/deploy──▶              └──▶ Vestaboard (Read/Write API)
+GitHub Actions (deploy-stackit) ──build/push/deploy──▶              └──▶ Vestaboard (Cloud API)
 ```
 STACKIT Functions only supports HTTP triggers and scales to zero, so it can't run a schedule itself – the cron
 lives in GitHub Actions. There is no Infrastructure-as-Code (Terraform etc.) for Functions that we know of; as far as
@@ -43,7 +43,8 @@ the [Functions docs](https://docs.functions.onstackit.cloud/basics/concepts.html
 | `AOC_LEADERBOARD_ID` | yes | number at the end of the private leaderboard URL; in CI it may be a repository variable or a secret |
 | `AOC_SESSION` | yes | AoC session cookie, see below |
 | `SLACK_WEBHOOK_URL` | no | Slack incoming webhook; skipped if unset |
-| `VESTABOARD_API_KEY` | no | Vestaboard Read/Write key; skipped if unset |
+| `VESTABOARD_API_KEY` | no | Vestaboard Cloud API token; skipped if unset |
+| `VESTABOARD_FORCE`, `VESTABOARD_LEGACY` | no | `true` = also post while the board is muted/in quiet hours; `true` = use the old Read/Write API (repository *variables*) |
 | `AOC_YEAR` | no | event year; default: the current year |
 | `TRIGGER_TOKEN` | no, but **set it** | protects `/run` (the function URL is public) |
 | `EVENT_FIRST_DAY`, `EVENT_LAST_DAY` | no | December days on which the schedule is active (default `1` and `12`) |
@@ -70,8 +71,14 @@ if you log out; symptom is `advent of code returned HTTP … (expired session co
 `https://hooks.slack.com/services/…` URL. Remove last year's webhook once the new one works. Quick test:
 `curl -X POST -H 'Content-type: application/json' --data '{"text":"test"}' <url>` should answer `ok`.
 
-**Vestaboard (`VESTABOARD_API_KEY`).** The *Read/Write* key of the board. Not tested yet – verify at the office with a manual
-**aoc-trigger** run.
+**Vestaboard (`VESTABOARD_API_KEY`).** A **Cloud API token** (see the [docs](https://docs.vestaboard.com/docs/read-write-api/endpoints)):
+create it on web.vestaboard.com → *API* tab (or mobile app → Settings → Advanced Settings) → *Create New Token*, enable only the **Write**
+permission; it is shown once. The app posts to `https://cloud.vestaboard.com/` with the token in `X-Vestaboard-Token` and the board as
+`{"characters": [[…]]}`. Notes from the docs: more than one message per 15 seconds may be dropped, and a **muted board or quiet hours** reject
+messages with HTTP 423 unless `forced` is sent – set the variable `VESTABOARD_FORCE=true` if the board should update then too.
+Last year's app used the old *Read/Write API* (`rw.vestaboard.com`, header `X-Vestaboard-Read-Write-Key`); I have not found documentation saying that an old key works with the Cloud
+API. If you only have such an old key, set `VESTABOARD_LEGACY=true` (unsupported/untested by us; creating a Cloud token is better).
+Not tested against a real board yet – verify at the office with a manual **aoc-trigger** run (`target = vesta`); the reply shows the API's answer.
 
 ## Deploy on STACKIT Functions
 Per the Functions docs the container must be `linux/amd64`, serve HTTP on `$PORT`, handle SIGTERM and run as a numeric
@@ -131,6 +138,7 @@ Settings → Secrets and variables → Actions.
 | `STACKIT_PROJECT_ID` | STACKIT project id |
 | `AOC_LEADERBOARD_ID` | may be a variable *or* a secret (not sensitive on its own) |
 | `AOC_YEAR` | optional; **remove it again after testing a past year** |
+| `VESTABOARD_FORCE` / `VESTABOARD_LEGACY` | optional, see above |
 | `STACKIT_FUNCTION_NAME` / `STACKIT_PULL_SECRET_NAME` | optional (default function name `aoc-leaderboard`; pull secret name only for cleanup) |
 
 **Secrets**
@@ -141,7 +149,7 @@ Settings → Secrets and variables → Actions.
 | `AOC_SESSION` | AoC session cookie |
 | `AOC_TRIGGER_TOKEN` | long random string; deployed as `TRIGGER_TOKEN` *and* sent as bearer token by `aoc-trigger`. e.g. PowerShell: `-join ((48..57)+(65..90)+(97..122) \| Get-Random -Count 40 \| % {[char]$_})` |
 | `SLACK_WEBHOOK_URL` | Slack incoming webhook |
-| `VESTABOARD_API_KEY` | optional until the board is tested |
+| `VESTABOARD_API_KEY` | Vestaboard Cloud API token (Write permission); optional until the board is tested |
 | `AOC_FUNCTION_URL` | `https://<id>.functions.onstackit.cloud`, known only after the first successful deploy (`sfn functions list`/`describe`); needed by `aoc-trigger` |
 
 The deploy job starts with a **Check configuration** step that lists every missing variable/secret by name in one error.
@@ -198,7 +206,7 @@ belongs to a member of that board.
 | deploy log: `Function revision deployment timed out` (older workflow versions) | the revision was created and usually comes up a few minutes later; check `sfn functions list` (State `Active`). Current workflows poll instead of failing |
 | `denied` while `sfn` pulls `ghcr.io/stackitcloud/functions-builder` (only when building templates locally) | stale ghcr.io login in Docker: `docker logout ghcr.io` |
 | `aoc-trigger` is green but nothing is posted | older versions of the workflow hid redirects/empty replies; the current one prints the HTTP status and body and fails on anything but a 2xx with a body. Check `AOC_FUNCTION_URL` starts with `https://`, and `lookback` has a unit (`8760h`, not `8760`) |
-| run says `vesta: … -> HTTP 200 {…}` but the board doesn't change | the API accepted the message, so look at the board side: is the key the *Read/Write* key of this board (Vestaboard app → Settings → API), is the board online / in quiet hours or paused? Read back what the cloud thinks is on the board: `Invoke-RestMethod https://rw.vestaboard.com/ -Headers @{"X-Vestaboard-Read-Write-Key"=$key}` |
+| run says `vesta: … -> HTTP 200 {…}` but the board doesn't change | the API accepted the message, so look at the board side: is the token a **Cloud API token** of *this* board, is the board online? Muted/quiet-hours answers 423 (`VESTABOARD_FORCE=true`). Read back what the cloud has: `Invoke-RestMethod https://cloud.vestaboard.com/ -Headers @{"X-Vestaboard-Token"=$key}` |
 | deploy: `Deploy not configured` | the error lists the missing variables/secrets (Settings → Secrets and variables → Actions) |
 | `docker login` / push denied | wrong push-robot credentials, or the robot lacks Repository → Push |
 | deploy workflow never starts | it triggers on `master`; check the path filter or start it manually |
